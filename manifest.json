@@ -6,8 +6,8 @@
     "rebuild": {
       "version": "1.9.0",
       "url": "https://github.com/ljy7727/vulcan-release/releases/download/v1.9.0/vulcan-desktop-rebuild-1.9.0-win-x64.zip",
-      "size": 72738671,
-      "sha256": "cc82ab5f4a7618917331734617c34856ab15a3aaaf93a0e9deabace54dd8bc84",
+      "size": 72717429,
+      "sha256": "58645220dd4e9015043d97b97ac42fde572b6f4d49b7711904bdf451b8f1f80d",
       "notes": "重建编译版（有源码，推荐）"
     },
     "original": {
