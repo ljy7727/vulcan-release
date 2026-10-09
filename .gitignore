@@ -1,0 +1,29 @@
+# 业务数据与私有资料一律不入库
+*.xlsx
+*.xls
+*.db
+*.apk
+*.jks
+*.keystore
+*.zip
+*.jar
+
+# 运行/构建产物
+build/
+.gradle/
+.kotlin/
+out/
+*.log
+
+# 真实运行数据（用 / 前缀只匹配仓库根，避免误伤源码里的 data/ 包目录）
+prefs.json
+vulcan.db
+app.log
+运行时数据/
+/data/
+/output/
+
+# 本地测试用密钥（如存在则忽略）
+local.properties
+.env
+secret*.txt
