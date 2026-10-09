@@ -90,7 +90,7 @@ fun App(state: AppState) {
                             when (state.tab) {
                                 0 -> QueryScreen(state)
                                 1 -> FirstCureScreen(state)
-                                2 -> DefectScreen(state)
+                                2 -> DefectScreen(state, scroll)
                                 3 -> MemoScreen(state)
                                 4 -> ImportScreen(state)
                                 5 -> BackupScreen(state)
