@@ -279,6 +279,28 @@ class DesktopDb(private val dbFile: File = defaultDbFile()) {
         }
     }
 
+    /**
+     * 查询某不良码的判胎记录，并**聚合其子类**（如 FM → FM/FMC/FME/FMG/FMW…）。
+     * 判胎表里 FM 家族有 17 个 code，但不良表只有 FM 一个条目；
+     * 精确匹配会漏掉全部子类记录，故此处用前缀聚合。
+     */
+    fun queryCausesFamily(code: String): List<DefectCause> {
+        val out = mutableListOf<DefectCause>()
+        conn.prepareStatement(
+            "SELECT code,name,cause,dept,count FROM defect_cause " +
+                    "WHERE code=? OR code LIKE ? ORDER BY count DESC"
+        ).use { ps ->
+            ps.setString(1, code)
+            ps.setString(2, code + "%")
+            ps.executeQuery().use { rs ->
+                while (rs.next()) out.add(
+                    DefectCause(rs.getString(1) ?: "", rs.getString(2) ?: "", rs.getString(3) ?: "", rs.getString(4) ?: "", rs.getInt(5))
+                )
+            }
+        }
+        return out
+    }
+
     fun queryCauses(code: String): List<DefectCause> {
         val out = mutableListOf<DefectCause>()
         conn.prepareStatement("SELECT code,name,cause,dept,count FROM defect_cause WHERE code=? ORDER BY count DESC").use { ps ->
