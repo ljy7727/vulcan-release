@@ -415,7 +415,7 @@ fun DefectScreen(state: AppState, scroll: ScrollState) {
                             selected = d.code
                             noteEdit = d.note
                             val fam = state.db.queryCausesFamily(d.code)
-                            AppLog.line("[不良] 打开详情 ${d.code} ${d.name}｜判胎 ${fam.size} 条｜子类 ${fam.map { it.code }.filter { it != d.code }.distinct().size} 种")
+                            AppLog.line("[不良] 打开详情 ${d.code} ${d.name}｜判胎记录 ${fam.size} 条｜子类 ${fam.map { it.code }.filter { it != d.code }.distinct().size} 种")
                             // 详情在列表上方：选中后滚回顶部，避免"点了看不到"
                             scope.launch { scroll.animateScrollTo(0) }
                         }
@@ -466,9 +466,10 @@ private fun DefectDetailCard(
         Text(
             if (causes.isEmpty()) "暂无判胎数据（请在数据页导入判胎分析表）"
             else buildString {
-                append("判胎 ${causes.size} 种原因 · 共 $total 条")
+                // 明确区分三个维度：原因记录条数 / 不良合计条数 / 子类种数
+                append("判胎记录 ${causes.size} 条 · 不良合计 $total 条")
                 if (subCodes.isNotEmpty()) {
-                    append("（含子类 ${subCodes.size} 种：")
+                    append("（含 ${subCodes.size} 种子类：")
                     append(subCodes.take(8).joinToString("/"))
                     if (subCodes.size > 8) append("…")
                     append("）")
@@ -531,7 +532,7 @@ private fun DefectDetailCard(
 
             // 判胎明细
             Box(Modifier.height(14.dp))
-            Text("判胎明细（${causes.size}）", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Text("判胎明细（${causes.size} 条记录）", fontWeight = FontWeight.Bold, fontSize = 15.sp)
             Box(Modifier.height(4.dp))
             causes.take(60).forEach { c ->
                 Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
