@@ -1,14 +1,18 @@
 package com.heda.vulcan.ui
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -25,6 +29,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,10 +41,16 @@ import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.heda.vulcan.data.CapsuleAlias
+import com.heda.vulcan.data.Defect
+import com.heda.vulcan.data.DefectCause
 import com.heda.vulcan.data.FirstCure
 import com.heda.vulcan.data.ImportManager
 import com.heda.vulcan.data.JudgeGuide
@@ -340,70 +351,292 @@ private fun refreshFirstCure(state: AppState) {
 
 // ---------------- 3. 不良 ----------------
 
+/** 饼图色板（与网页版一致） */
+private val PIE_COLORS = listOf(
+    Color(0xFF1565C0), Color(0xFF26A69A), Color(0xFFEF6C00), Color(0xFF8E24AA),
+    Color(0xFF43A047), Color(0xFFD81B60), Color(0xFF6D4C41), Color(0xFF546E7A)
+)
+
+/**
+ * 外观不良：搜索 + 详情（原因条形图 / 责任科室饼图 / 判胎明细 / 备注）+ 列表。
+ * 对齐网页版表现；并额外解决网页版未处理的问题：FM 家族子类（FMC/FMG/FMW…）
+ * 在判胎表中独立成 code 但不良表只有 FM 一条，精确匹配会漏数据，故按前缀聚合。
+ */
 @Composable
-fun DefectScreen(state: AppState) {
-    SectionTitle("外观不良（${state.defects.size}）")
+fun DefectScreen(state: AppState, scroll: ScrollState) {
+    val scope = rememberCoroutineScope()
     var search by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<String?>(null) }
     var noteEdit by remember { mutableStateOf("") }
 
-    Field("搜索（简称或名称）", search, { search = it })
-    Box(Modifier.height(8.dp))
-
+    SectionTitle("外观不良")
+    LaunchedEffect(Unit) {
+        AppLog.line("[不良] 页面打开：共 ${state.defects.size} 条不良")
+    }
     val filtered = if (search.isBlank()) state.defects
     else state.defects.filter { it.code.contains(search, true) || it.name.contains(search, true) }
 
-    // 详情在上
+    Card2 {
+        Field("搜索（简称或名称）", search, { search = it })
+        Box(Modifier.height(6.dp))
+        Text(
+            "共 ${state.defects.size} 条不良，当前显示 ${filtered.size} 条",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.outline
+        )
+    }
+
+    // 详情：选中后才出现，位于列表上方
     selected?.let { code ->
-        val d = state.defects.firstOrNull { it.code == code }
-        if (d != null) {
-            Card2 {
-                Text("${d.code} — ${d.name}", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Box(Modifier.height(6.dp))
-                Text(d.description, fontSize = 13.sp)
-                JudgeGuide.forCode(d.code)?.let {
-                    Box(Modifier.height(6.dp))
-                    Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
-                }
-                val causes = state.db.queryCauses(d.code)
-                if (causes.isNotEmpty()) {
-                    Box(Modifier.height(8.dp))
-                    Text("判胎分析（${causes.size} 条）", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    causes.take(20).forEach { c ->
-                        Text("· ${c.cause}｜${c.dept}｜${c.count}条", fontSize = 12.sp)
-                    }
-                }
-                Box(Modifier.height(8.dp))
-                Text("自定义备注", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-                OutlinedTextField(
-                    value = noteEdit, onValueChange = { noteEdit = it },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Box(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = {
-                        state.db.updateDefectNote(d.code, noteEdit)
-                        state.defects.clear(); state.defects.addAll(state.db.queryDefects())
-                        state.setStatus("备注已保存")
-                    }) { Text("保存备注") }
-                    OutlinedButton(onClick = { selected = null }) { Text("关闭") }
-                }
-            }
+        state.defects.firstOrNull { it.code == code }?.let { d ->
+            DefectDetailCard(state, d, noteEdit, { noteEdit = it }, onClose = { selected = null })
         }
     }
 
-    filtered.take(300).forEach { d ->
-        Row(
-            modifier = Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .clickable { selected = d.code; noteEdit = d.note }
-                .padding(vertical = 7.dp, horizontal = 6.dp)
-        ) {
-            Text(d.code, fontWeight = FontWeight.Bold, modifier = Modifier.width(70.dp))
-            Text(d.name, fontSize = 13.sp)
-            if (d.note.isNotEmpty()) Text("  ✎", color = MaterialTheme.colorScheme.primary)
+    // 列表
+    Card2 {
+        if (filtered.isEmpty()) {
+            Text("没有匹配的不良", fontSize = 13.sp, color = MaterialTheme.colorScheme.outline)
+        }
+        filtered.take(400).forEachIndexed { idx, d ->
+            val sel = selected == d.code
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(
+                        if (sel) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                        else Color.Transparent
+                    )
+                    .clickable {
+                        if (sel) {
+                            selected = null
+                            AppLog.line("[不良] 收起详情 ${d.code}")
+                        } else {
+                            selected = d.code
+                            noteEdit = d.note
+                            val fam = state.db.queryCausesFamily(d.code)
+                            AppLog.line("[不良] 打开详情 ${d.code} ${d.name}｜判胎 ${fam.size} 条｜子类 ${fam.map { it.code }.filter { it != d.code }.distinct().size} 种")
+                            // 详情在列表上方：选中后滚回顶部，避免"点了看不到"
+                            scope.launch { scroll.animateScrollTo(0) }
+                        }
+                    }
+                    .padding(vertical = 8.dp, horizontal = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    d.code, fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.width(62.dp), maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    d.name, fontSize = 13.sp,
+                    modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                if (d.note.isNotEmpty()) {
+                    Text("✎", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                }
+            }
+            if (idx < filtered.size - 1) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f))
+            }
         }
     }
+}
+
+@Composable
+private fun DefectDetailCard(
+    state: AppState,
+    d: Defect,
+    noteEdit: String,
+    onNoteChange: (String) -> Unit,
+    onClose: () -> Unit
+) {
+    // FM 家族聚合：FM → FM/FMC/FME/FMG/FMW…
+    val causes = remember(d.code) { state.db.queryCausesFamily(d.code) }
+    val total = causes.sumOf { it.count }
+    val subCodes = causes.map { it.code }.filter { it != d.code }.distinct()
+
+    Card2 {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(d.code, fontWeight = FontWeight.Bold, fontSize = 22.sp, color = MaterialTheme.colorScheme.primary)
+            Box(Modifier.width(8.dp))
+            Text(d.name, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+        }
+        Box(Modifier.height(4.dp))
+        Text(
+            if (causes.isEmpty()) "暂无判胎数据（请在数据页导入判胎分析表）"
+            else buildString {
+                append("判胎 ${causes.size} 种原因 · 共 $total 条")
+                if (subCodes.isNotEmpty()) {
+                    append("（含子类 ${subCodes.size} 种：")
+                    append(subCodes.take(8).joinToString("/"))
+                    if (subCodes.size > 8) append("…")
+                    append("）")
+                }
+            },
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.outline
+        )
+        JudgeGuide.forCode(d.code)?.let {
+            Box(Modifier.height(6.dp))
+            Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+        }
+        if (d.description.isNotEmpty()) {
+            Box(Modifier.height(8.dp))
+            Text(d.description, fontSize = 13.sp)
+        }
+
+        if (causes.isNotEmpty()) {
+            // 原因占比 Top8（横向条形）
+            Box(Modifier.height(14.dp))
+            Text("原因占比 Top8", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Box(Modifier.height(8.dp))
+            val top = causes.take(8)
+            val mx = top.firstOrNull()?.count?.coerceAtLeast(1) ?: 1
+            top.forEach { c -> CauseBar(c.cause, c.count, mx) }
+
+            // 责任科室占比（饼图 + 百分比图例）
+            val byDept = linkedMapOf<String, Int>()
+            causes.forEach { c ->
+                val k = c.dept.ifEmpty { "—" }
+                byDept[k] = (byDept[k] ?: 0) + c.count
+            }
+            val depts = byDept.entries.sortedByDescending { it.value }.map { it.key to it.value }
+            Box(Modifier.height(16.dp))
+            Text("责任科室占比", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Box(Modifier.height(8.dp))
+            val holeColor = MaterialTheme.colorScheme.surface
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Canvas(modifier = Modifier.size(132.dp)) { drawDonut(depts, holeColor) }
+                Box(Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    depts.forEachIndexed { i, (k, v) ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(vertical = 2.dp)
+                        ) {
+                            Box(
+                                Modifier.size(9.dp)
+                                    .background(PIE_COLORS[i % PIE_COLORS.size], RoundedCornerShape(2.dp))
+                            )
+                            Box(Modifier.width(6.dp))
+                            Text(
+                                "$k  $v (${pct(v, total)}%)",
+                                fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 判胎明细
+            Box(Modifier.height(14.dp))
+            Text("判胎明细（${causes.size}）", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Box(Modifier.height(4.dp))
+            causes.take(60).forEach { c ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                    if (c.code != d.code) {
+                        Text(
+                            "[${c.code}] ", fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.width(52.dp), maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                    } else {
+                        Box(Modifier.width(52.dp))
+                    }
+                    Text(
+                        c.cause.ifEmpty { "—" }, fontSize = 13.sp,
+                        modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        "${c.dept.ifEmpty { "—" }} · ${c.count} 条",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, maxLines = 1
+                    )
+                }
+            }
+        }
+
+        // 我的备注
+        Box(Modifier.height(14.dp))
+        Text("我的备注（可编辑）", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        Box(Modifier.height(6.dp))
+        OutlinedTextField(
+            value = noteEdit, onValueChange = onNoteChange,
+            modifier = Modifier.fillMaxWidth(), minLines = 2
+        )
+        Box(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                state.db.updateDefectNote(d.code, noteEdit)
+                state.defects.clear(); state.defects.addAll(state.db.queryDefects())
+                state.setStatus("备注已保存：${d.code}")
+            }) { Text("保存备注") }
+            OutlinedButton(onClick = {
+                DesktopUtil.copyText(buildCopyText(d, causes))
+                state.setStatus("已复制判胎信息（${causes.size} 条）")
+            }) { Text("复制判胎信息") }
+            OutlinedButton(onClick = onClose) { Text("收起") }
+        }
+    }
+}
+
+/** 横向占比条 */
+@Composable
+private fun CauseBar(label: String, count: Int, max: Int) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(bottom = 5.dp)
+    ) {
+        Text(
+            label.ifEmpty { "—" }, fontSize = 12.sp,
+            modifier = Modifier.width(116.dp), maxLines = 1, overflow = TextOverflow.Ellipsis
+        )
+        Box(
+            Modifier.weight(1f).height(16.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth((count.toFloat() / max).coerceIn(0.02f, 1f))
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.primary)
+            )
+        }
+        Text(
+            "${count}条", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.width(50.dp), textAlign = TextAlign.End, maxLines = 1
+        )
+    }
+}
+
+/** 甜甜圈图：按占比绘制扇区，中心用表面色挖空形成环。 */
+private fun DrawScope.drawDonut(data: List<Pair<String, Int>>, holeColor: Color) {
+    val total = data.sumOf { it.second }.coerceAtLeast(1)
+    var start = -90f
+    data.forEachIndexed { i, (_, v) ->
+        val sweep = v * 360f / total
+        drawArc(
+            color = PIE_COLORS[i % PIE_COLORS.size],
+            startAngle = start,
+            sweepAngle = sweep,
+            useCenter = true
+        )
+        start += sweep
+    }
+    drawCircle(color = holeColor, radius = size.minDimension / 2f * 0.45f)
+}
+
+private fun pct(part: Int, total: Int): String {
+    val p = part * 100.0 / total.coerceAtLeast(1)
+    return if (p == p.toLong().toDouble()) p.toLong().toString() else "%.1f".format(p)
+}
+
+private fun buildCopyText(d: Defect, causes: List<DefectCause>): String = buildString {
+    append(d.code).append(' ').append(d.name).append('\n')
+    if (d.note.isNotEmpty()) append(d.note).append('\n')
+    causes.forEach { append("${it.cause} / ${it.dept} / ${it.count}条\n") }
 }
 
 // ---------------- 4. 备忘 ----------------
