@@ -28,8 +28,19 @@ import java.util.zip.ZipInputStream
  */
 object Updater {
 
-    const val DEFAULT_MANIFEST =
-        "https://raw.githubusercontent.com/ljy7727/vulcan-release/main/manifest.json"
+    /**
+     * manifest 源（按顺序回退，任一可达即可）。
+     * ① GitHub API：在内网/代理环境下最常被放行；
+     * ② raw：直连最快；
+     * ③ jsDelivr CDN 镜像：GitHub 被墙时的兜底。
+     */
+    val MANIFEST_SOURCES: List<String> = listOf(
+        "https://api.github.com/repos/ljy7727/vulcan-release/contents/manifest.json",
+        "https://raw.githubusercontent.com/ljy7727/vulcan-release/main/manifest.json",
+        "https://cdn.jsdelivr.net/gh/ljy7727/vulcan-release@main/manifest.json"
+    )
+
+    val DEFAULT_MANIFEST: String get() = MANIFEST_SOURCES.first()
 
     data class Asset(
         val version: String,
@@ -61,20 +72,32 @@ object Updater {
         )
     }
 
-    /** 拉取 manifest；失败返回 null（离线/网络异常静默处理）。 */
-    fun fetch(manifestUrl: String = DEFAULT_MANIFEST): Manifest? = try {
-        val client = HttpClient.newBuilder()
-            .followRedirects(HttpClient.Redirect.ALWAYS)
-            .connectTimeout(Duration.ofSeconds(10))
-            .build()
+    /** 依次尝试各 manifest 源，任一成功即返回；全部失败返回 null（离线静默）。 */
+    fun fetch(): Manifest? {
+        for (src in MANIFEST_SOURCES) {
+            fetchOne(src)?.let { return it }
+        }
+        AppLogLine("更新检查失败：所有源均不可达")
+        return null
+    }
+
+    /** 拉取单个 manifest 源。GitHub API 返回 base64 包裹，自动解码。 */
+    fun fetchOne(manifestUrl: String): Manifest? = try {
+        val client = newClient()
         val req = HttpRequest.newBuilder(URI.create(manifestUrl))
             .timeout(Duration.ofSeconds(20))
+            .header("Accept", "application/vnd.github+json")
             .GET()
             .build()
         val resp = client.send(req, HttpResponse.BodyHandlers.ofString())
         if (resp.statusCode() !in 200..299) null
         else {
-            val root = Json.parse(resp.body()).asMap()
+            val root0 = Json.parse(resp.body()).asMap()
+            // GitHub Contents API：{"encoding":"base64","content":"..."}
+            val body = if (root0["encoding"].asStr() == "base64") {
+                String(java.util.Base64.getMimeDecoder().decode(root0["content"].asStr()))
+            } else resp.body()
+            val root = Json.parse(body).asMap()
             val d = root["desktop"].asMap()
             Manifest(
                 version = root["version"].asStr(),
@@ -86,8 +109,34 @@ object Updater {
             )
         }
     } catch (e: Exception) {
-        AppLogLine("更新检查失败: ${e.message}")
+        AppLogLine("manifest 源不可达: $manifestUrl (${e.message})")
         null
+    }
+
+    /** 构建 HttpClient（支持 http(s)_proxy 环境变量，企业内网必需）。 */
+    private fun newClient(): HttpClient {
+        val b = HttpClient.newBuilder()
+            .followRedirects(HttpClient.Redirect.ALWAYS)
+            .connectTimeout(Duration.ofSeconds(10))
+        proxyAddress()?.let { (host, port) ->
+            try {
+                b.proxy(java.net.ProxySelector.of(java.net.InetSocketAddress(host, port)))
+            } catch (_: Exception) {
+            }
+        }
+        return b.build()
+    }
+
+    private fun proxyAddress(): Pair<String, Int>? {
+        val raw = System.getenv("https_proxy") ?: System.getenv("HTTPS_PROXY")
+            ?: System.getenv("http_proxy") ?: System.getenv("HTTP_PROXY")
+            ?: return null
+        return try {
+            val u = URI.create(if (raw.contains("://")) raw else "http://$raw")
+            Pair(u.host, if (u.port > 0) u.port else 80)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /** 重建版是否有新版本（按版本号字符串比较）。 */
@@ -97,10 +146,7 @@ object Updater {
     /** 下载文件到目标路径（带进度回调，0..100）。返回是否成功。 */
     fun download(asset: Asset, dest: File, onProgress: (Int) -> Unit = {}): Boolean = try {
         dest.parentFile?.mkdirs()
-        val client = HttpClient.newBuilder()
-            .followRedirects(HttpClient.Redirect.ALWAYS)
-            .connectTimeout(Duration.ofSeconds(15))
-            .build()
+        val client = newClient()
         val req = HttpRequest.newBuilder(URI.create(asset.url)).GET().build()
         val resp = client.send(req, HttpResponse.BodyHandlers.ofInputStream())
         if (resp.statusCode() !in 200..299) {
