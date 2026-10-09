@@ -1,0 +1,35 @@
+{
+  "version": "1.9.0",
+  "updated_at": "2026-10-09",
+  "notes": "新增：读剪贴板识别（无需 OCR）、在线更新、序列号激活",
+  "desktop": {
+    "rebuild": {
+      "version": "1.9.0",
+      "url": "",
+      "size": 0,
+      "sha256": "",
+      "notes": "重建编译版（有源码，推荐）"
+    },
+    "original": {
+      "version": "2.0",
+      "url": "",
+      "size": 0,
+      "sha256": "",
+      "notes": "原版程序包（无源码，原始版本基线）"
+    }
+  },
+  "apk": {
+    "version": "1.5.0",
+    "url": "",
+    "size": 0,
+    "sha256": "",
+    "notes": "安卓版"
+  },
+  "web": {
+    "version": "1.5.0",
+    "url": "",
+    "size": 0,
+    "sha256": "",
+    "notes": "网页版（单文件 HTML）"
+  }
+}
