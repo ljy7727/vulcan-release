@@ -671,7 +671,7 @@ fun UpdateScreen(state: AppState) {
             checking = true
             state.setStatus("正在检查更新…")
             scope.launch(Dispatchers.IO) {
-                val m = Updater.fetch()
+                val m = Updater.fetch()   // 多源回退：GitHub API → raw → CDN
                 withContext(Dispatchers.Main) {
                     checking = false
                     manifest = m
