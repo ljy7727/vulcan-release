@@ -5,16 +5,16 @@
   "desktop": {
     "rebuild": {
       "version": "1.9.0",
-      "url": "",
-      "size": 0,
-      "sha256": "",
+      "url": "https://github.com/ljy7727/vulcan-release/releases/download/v1.9.0/vulcan-desktop-rebuild-1.9.0-win-x64.zip",
+      "size": 72738671,
+      "sha256": "cc82ab5f4a7618917331734617c34856ab15a3aaaf93a0e9deabace54dd8bc84",
       "notes": "重建编译版（有源码，推荐）"
     },
     "original": {
       "version": "2.0",
-      "url": "",
-      "size": 0,
-      "sha256": "",
+      "url": "https://github.com/ljy7727/vulcan-release/releases/download/v1.9.0/vulcan-desktop-original-2.0-win-x64.zip",
+      "size": 175306054,
+      "sha256": "a00025ffc2a6f152a32a2e666d40f10f3163eaf47c51de0a9040920390fe4957",
       "notes": "原版程序包（无源码，原始版本基线）"
     }
   },
@@ -23,13 +23,13 @@
     "url": "",
     "size": 0,
     "sha256": "",
-    "notes": "安卓版"
+    "notes": "安卓版（暂未接入在线更新）"
   },
   "web": {
     "version": "1.5.0",
     "url": "",
     "size": 0,
     "sha256": "",
-    "notes": "网页版（单文件 HTML）"
+    "notes": "网页版（单文件 HTML，暂未接入在线更新）"
   }
 }
