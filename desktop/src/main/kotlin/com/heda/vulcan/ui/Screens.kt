@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -97,12 +98,44 @@ private fun Field(label: String, value: String, onChange: (String) -> Unit, modi
 }
 
 @Composable
-private fun Card2(content: @Composable () -> Unit) {
+private fun Card2(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+        modifier = modifier.fillMaxWidth().padding(bottom = 10.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(modifier = Modifier.padding(12.dp)) { content() }
+    }
+}
+
+/** 小标签（区域 / 参数摘要等） */
+@Composable
+private fun InfoChip(text: String, color: Color) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(color.copy(alpha = 0.12f))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    ) {
+        Text(text, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = color, maxLines = 1)
+    }
+}
+
+/** 大参数块（详情卡 2 列网格用） */
+@Composable
+private fun BigParam(
+    label: String,
+    value: String,
+    suffix: String = "",
+    valueColor: Color? = null,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier.padding(vertical = 5.dp)) {
+        Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+        Text(
+            value + suffix, fontSize = 17.sp, fontWeight = FontWeight.Bold,
+            color = valueColor ?: MaterialTheme.colorScheme.onSurface,
+            maxLines = 1, overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -118,95 +151,355 @@ private fun KvRow(k: String, v: String) {
 
 @Composable
 fun QueryScreen(state: AppState) {
-    SectionTitle("工艺查询")
+    var pasteInput by remember { mutableStateOf("") }
+    var patternMenu by remember { mutableStateOf(false) }
+    var sizeMenu by remember { mutableStateOf(false) }
+    var machineMenu by remember { mutableStateOf(false) }
 
-    Card2 {
-        var patternMenu by remember { mutableStateOf(false) }
-        var regionMenu by remember { mutableStateOf(false) }
-        var shortcut by remember { mutableStateOf("") }
+    Row(modifier = Modifier.fillMaxSize()) {
+        // ============ 左：查询条件 ============
+        Column(
+            modifier = Modifier
+                .width(380.dp)
+                .fillMaxHeight()
+                .padding(start = 16.dp, top = 16.dp, bottom = 16.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            Text("工艺查询", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Text("按 花纹 + 规格尺寸 + 销售区域 查询硫化工艺", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+            Box(Modifier.height(12.dp))
 
-        // 花纹
-        Column {
-            Text("花纹（规格）", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-            Box {
-                OutlinedButton(onClick = { patternMenu = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text(state.queryPattern.ifEmpty { "选择花纹（共 ${state.patterns.size}）" })
-                }
-                DropdownMenu(expanded = patternMenu, onDismissRequest = { patternMenu = false }) {
-                    state.patterns.take(200).forEach { p ->
-                        DropdownMenuItem(text = { Text(p) }, onClick = { state.queryPattern = p; patternMenu = false })
+            Card2 {
+                // 标题 + 一键清空
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("查询条件", fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { clearQuery(state) }) {
+                        Text("一键清空", color = MaterialTheme.colorScheme.error)
                     }
                 }
-            }
-        }
+                Box(Modifier.height(4.dp))
 
-        Box(Modifier.height(6.dp))
-        Field("规格尺寸", state.querySize, { state.querySize = it })
-
-        // 区域
-        val regions = if (state.queryPattern.isNotEmpty() && state.querySize.isNotEmpty())
-            state.db.queryRegions(state.queryPattern, state.querySize) else emptyList()
-        Box(Modifier.height(6.dp))
-        Column {
-            Text("销售区域（不选=全部）", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
-            Box {
-                OutlinedButton(onClick = { regionMenu = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text(state.queryRegion.ifEmpty { if (regions.isEmpty()) "全部区域" else "选择区域" })
-                }
-                DropdownMenu(expanded = regionMenu, onDismissRequest = { regionMenu = false }) {
-                    DropdownMenuItem(text = { Text("全部区域") }, onClick = { state.queryRegion = ""; regionMenu = false })
-                    regions.forEach { r ->
-                        DropdownMenuItem(text = { Text(r) }, onClick = { state.queryRegion = r; regionMenu = false })
+                // 花纹：输入 + 联想（聚焦/点击展开，输入过滤，忽略大小写）
+                Box {
+                    OutlinedTextField(
+                        value = state.queryPattern,
+                        onValueChange = { state.queryPattern = it; patternMenu = true; sizeMenu = false },
+                        label = { Text("花纹（规格）") },
+                        placeholder = { Text("如 RU06，点击即联想") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        trailingIcon = {
+                            TextButton(onClick = { patternMenu = !patternMenu }) { Text("▾") }
+                        }
+                    )
+                    val sug = remember(state.queryPattern, state.patterns.size) {
+                        patternSuggestions(state.queryPattern, state.patterns)
+                    }
+                    DropdownMenu(
+                        expanded = patternMenu && sug.isNotEmpty(),
+                        onDismissRequest = { patternMenu = false },
+                        modifier = Modifier.heightIn(max = 280.dp)
+                    ) {
+                        Text(
+                            if (state.queryPattern.isBlank()) "全部花纹（${state.patterns.size}）" else "匹配 ${sug.size} 项",
+                            fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                        sug.forEach { p ->
+                            val on = p.equals(state.queryPattern, ignoreCase = true)
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        p, fontSize = 13.sp,
+                                        fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                },
+                                onClick = {
+                                    state.queryPattern = p
+                                    patternMenu = false
+                                    // 花纹确定后，尺寸列表跟随该花纹
+                                    sizeMenu = false
+                                }
+                            )
+                        }
                     }
                 }
-            }
-        }
 
-        Box(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { doQuery(state) }) { Text("查询") }
-            Button(onClick = { readClipboardToQuery(state) }) { Text("读剪贴板") }
-            OutlinedButton(onClick = {
-                state.queryPattern = ""; state.querySize = ""; state.queryRegion = ""
-                state.queryResult = null; state.queryCandidates = emptyList()
-            }) { Text("一键清空") }
-        }
+                Box(Modifier.height(8.dp))
 
-        Box(Modifier.height(10.dp))
-        HorizontalDivider()
-        Box(Modifier.height(8.dp))
-        Field("快捷识别（粘贴整条物料）", shortcut, { shortcut = it })
-        Box(Modifier.height(6.dp))
-        OutlinedButton(onClick = {
-            val (sz, pat, reg) = MaterialParser.extractFromFull(shortcut, state.patterns)
-            if (pat != null) state.queryPattern = pat
-            if (sz != null) state.querySize = sz
-            if (reg != null) state.queryRegion = reg
-            state.setStatus("快捷识别：花纹=$pat 尺寸=$sz 区域=$reg")
-        }) { Text("识别") }
-    }
+                // 规格尺寸：输入 + 联想
+                Box {
+                    OutlinedTextField(
+                        value = state.querySize,
+                        onValueChange = { state.querySize = it; sizeMenu = true; patternMenu = false },
+                        label = { Text("规格尺寸") },
+                        placeholder = { Text("如 225/50ZR17") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        trailingIcon = {
+                            TextButton(onClick = { sizeMenu = !sizeMenu }) { Text("▾") }
+                        }
+                    )
+                    // 花纹确定后按花纹查尺寸（缓存，避免每次重组都查库）
+                    val allSizes = remember(state.queryPattern) {
+                        if (state.queryPattern.isNotEmpty()) state.db.querySizes(state.queryPattern) else emptyList()
+                    }
+                    val sug = if (state.querySize.isBlank()) allSizes.take(80)
+                    else allSizes.filter { it.contains(state.querySize, ignoreCase = true) }.take(50)
+                    DropdownMenu(
+                        expanded = sizeMenu && sug.isNotEmpty(),
+                        onDismissRequest = { sizeMenu = false },
+                        modifier = Modifier.heightIn(max = 280.dp)
+                    ) {
+                        Text(
+                            if (state.querySize.isBlank()) "可选尺寸（${sug.size}）" else "匹配 ${sug.size} 项",
+                            fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                        sug.forEach { sz ->
+                            val on = sz.equals(state.querySize, ignoreCase = true)
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        sz, fontSize = 13.sp,
+                                        fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                },
+                                onClick = { state.querySize = sz; sizeMenu = false }
+                            )
+                        }
+                    }
+                }
 
-    // 候选列表
-    if (state.queryCandidates.size > 1) {
-        Card2 {
-            Text("匹配到多条，请选择：", fontSize = 13.sp)
-            state.queryCandidates.forEach { s ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().clickable { pickSpec(state, s) }.padding(vertical = 8.dp)
+                Box(Modifier.height(10.dp))
+                // 销售区域（三选，等宽）
+                Text("销售区域", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                Box(Modifier.height(6.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("CH", "EU", "CN").forEach { code ->
+                        val on = state.queryRegion == code
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (on) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                                )
+                                .clickable { state.queryRegion = if (on) "" else code }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                code, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                                color = if (on) Color.White else MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+                Box(Modifier.height(4.dp))
+                Text("CH=中国 · EU=欧洲 · CN=其他 · 不选=全部区域", fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.outline)
+
+                Box(Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                Box(Modifier.height(10.dp))
+
+                // 机台（可不选）+ 侧别
+                Text("选择机台（可不选，用于首缸展示）", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                Box(Modifier.height(6.dp))
+                Box {
+                    OutlinedButton(onClick = { machineMenu = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            if (state.queryMachine.isEmpty()) "选择机台（可不选）"
+                            else "${state.queryMachine} · ${state.querySide}"
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = machineMenu, onDismissRequest = { machineMenu = false },
+                        modifier = Modifier.heightIn(max = 320.dp)
+                    ) {
+                        DropdownMenuItem(text = { Text("（不指定机台）") }, onClick = {
+                            state.queryMachine = ""; machineMenu = false
+                        })
+                        state.prefs.machines.ifEmpty { MachineList.machineIds }.forEach { m ->
+                            DropdownMenuItem(text = { Text(m) }, onClick = {
+                                state.queryMachine = m; machineMenu = false
+                            })
+                        }
+                    }
+                }
+                Box(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("双模", "L", "R").forEach { side ->
+                        val on = state.querySide == side
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (on) MaterialTheme.colorScheme.tertiary
+                                    else MaterialTheme.colorScheme.tertiary.copy(alpha = 0.08f)
+                                )
+                                .clickable { state.querySide = side }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                side, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                                color = if (on) Color.White else MaterialTheme.colorScheme.tertiary
+                            )
+                        }
+                    }
+                }
+                Box(Modifier.height(4.dp))
+                Text("机台可不选；“双模”=L/R统一规格", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+
+                Box(Modifier.height(14.dp))
+                Button(
+                    onClick = { doQuery(state) },
+                    modifier = Modifier.fillMaxWidth().height(46.dp)
                 ) {
-                    Text("[${s.region}] ${s.material}", fontSize = 13.sp)
+                    Text("查 询", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 }
+            }
+
+            Box(Modifier.height(4.dp))
+            // 快捷方式：粘贴识别（PC 版额外提供读剪贴板）
+            Card2 {
+                Text("快捷方式：粘贴完整物料自动识别", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                Box(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = pasteInput, onValueChange = { pasteInput = it },
+                        placeholder = { Text("如 225/50ZR17 XL RU06 4 98W CH LB DURUN") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Box(Modifier.width(8.dp))
+                    Button(onClick = {
+                        val (sz, pat, reg) = MaterialParser.extractFromFull(pasteInput, state.patterns)
+                        if (pat != null) state.queryPattern = pat
+                        if (sz != null) state.querySize = sz
+                        if (reg != null) state.queryRegion = reg
+                        state.setStatus("快捷识别：花纹=$pat 尺寸=$sz 区域=$reg")
+                    }) { Text("识别") }
+                }
+                Box(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { readClipboardToQuery(state) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("读剪贴板识别（复制那行物料后点这里）") }
+            }
+        }
+
+        // 竖向分隔线
+        Box(
+            Modifier.width(1.dp).fillMaxHeight()
+                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+        )
+
+        // ============ 右：查询结果 ============
+        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
+            ) {
+                QueryResultPane(state)
             }
         }
     }
+}
 
-    // 结果卡片
-    state.queryResult?.let { s -> SpecCard(state, s) }
+/** 花纹联想（忽略大小写；空输入给全部前 80 个） */
+private fun patternSuggestions(keyword: String, patterns: List<String>): List<String> =
+    if (keyword.isBlank()) patterns.take(80)
+    else patterns.filter { it.contains(keyword, ignoreCase = true) }.take(50)
+
+/** 右侧结果区：条件 chips → 列表 / 详情 */
+@Composable
+private fun QueryResultPane(state: AppState) {
+    val hasAny = state.queryResult != null || state.queryCandidates.isNotEmpty()
+    if (!hasAny) {
+        Box(Modifier.fillMaxWidth().padding(top = 120.dp), contentAlignment = Alignment.Center) {
+            Text("← 在左侧填写查询条件后点击「查询」", fontSize = 14.sp, color = MaterialTheme.colorScheme.outline)
+        }
+        return
+    }
+
+    // 条件回显 + 修改条件
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        InfoChip(state.queryPattern.ifEmpty { "—" }, MaterialTheme.colorScheme.primary)
+        Box(Modifier.width(6.dp))
+        InfoChip(state.querySize.ifEmpty { "—" }, MaterialTheme.colorScheme.primary)
+        Box(Modifier.width(6.dp))
+        InfoChip(state.queryRegion.ifEmpty { "全部区域" }, MaterialTheme.colorScheme.tertiary)
+        if (state.queryMachine.isNotEmpty()) {
+            Box(Modifier.width(6.dp))
+            InfoChip("${state.queryMachine} ${state.querySide}", MaterialTheme.colorScheme.secondary)
+        }
+        Box(Modifier.weight(1f))
+        TextButton(onClick = { state.queryCandidates = emptyList(); state.queryResult = null }) { Text("修改条件") }
+    }
+    Box(Modifier.height(8.dp))
+
+    when {
+        state.queryResult != null -> SpecCard(state, state.queryResult!!)
+        state.queryCandidates.isEmpty() ->
+            Text("未找到匹配的工艺，请调整查询条件", fontSize = 13.sp, color = MaterialTheme.colorScheme.outline)
+        else -> {
+            Text(
+                "找到 ${state.queryCandidates.size} 条记录，请点击选择：",
+                fontSize = 13.sp, color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            state.queryCandidates.forEach { s -> ResultRow(state, s) }
+        }
+    }
+}
+
+/** 结果行卡片（对应 APK ResultCard） */
+@Composable
+private fun ResultRow(state: AppState, s: ProcessSpec) {
+    val tc = remember(s.timeCode, state.extraSeconds) { TimeCode.parse(s.timeCode, state.extraSeconds) }
+    Card2(
+        modifier = Modifier.clickable { pickSpec(state, s) }
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(s.size, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.weight(1f))
+            InfoChip(s.region, MaterialTheme.colorScheme.tertiary)
+        }
+        Text(s.material, fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Box(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            InfoChip("模套 ${tc?.temp?.toString() ?: "—"}℃", MaterialTheme.colorScheme.error)
+            InfoChip("硫化 ${tc?.finalText ?: s.timeCode}", MaterialTheme.colorScheme.primary)
+            InfoChip("胶囊 ${CapsuleAlias.display(s.capsule, state.aliasLookup)}", MaterialTheme.colorScheme.primary)
+        }
+        Box(Modifier.height(4.dp))
+        Text("点击查看完整工艺 →", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+    }
+}
+
+private fun clearQuery(state: AppState) {
+    state.queryPattern = ""
+    state.querySize = ""
+    state.queryRegion = ""
+    state.queryMachine = ""
+    state.querySide = "双模"
+    state.queryResult = null
+    state.queryCandidates = emptyList()
+    state.setStatus("已清空查询条件")
 }
 
 /**
- * 原版「读剪贴板」逻辑：先读剪贴板文本走 SpecTextParser；文本不可用时
- * 原版会继续读剪贴板图片走 OCR（重建版 OCR 未接入，先提示）。
+ * 原版「读剪贴板」逻辑：先读剪贴板文本走 SpecTextParser；文本不可用时提示。
+ * 命中「胶囊对齐」时自动换算并说明。
  */
 private fun readClipboardToQuery(state: AppState) {
     val txt = DesktopUtil.clipboardText()
@@ -232,7 +525,7 @@ private fun readClipboardToQuery(state: AppState) {
             state.setStatus("剪贴板文字里没找到规格（内容：" + txt.replace("\n", " ").take(40) + "）")
         }
     } else {
-        state.setStatus("剪贴板里既没有文字也没有图片：请复制那行物料文字，或先截图再点这里")
+        state.setStatus("剪贴板里没有文字：请先复制那行物料文字")
     }
 }
 
@@ -252,7 +545,7 @@ private fun doQuery(state: AppState) {
         else -> {
             state.queryCandidates = list
             state.queryResult = null
-            state.setStatus("匹配到 ${list.size} 条，请在上方选择")
+            state.setStatus("匹配到 ${list.size} 条，请在右侧选择")
         }
     }
 }
@@ -263,44 +556,144 @@ private fun pickSpec(state: AppState, s: ProcessSpec) {
     state.setStatus("查询成功：${s.pattern} ${s.size} ${s.region}")
 }
 
+/** 工艺详情卡（对应 APK DetailCard，含 BigParam 网格与机台/侧别） */
 @Composable
 private fun SpecCard(state: AppState, s: ProcessSpec) {
-    val tc = TimeCode.parse(s.timeCode, state.extraSeconds)
-    val height = state.db.queryHeight(s.capsule)?.height ?: ""
+    var machineMenu by remember { mutableStateOf(false) }
+    val tc = remember(s.timeCode, state.extraSeconds) { TimeCode.parse(s.timeCode, state.extraSeconds) }
+    val heightInfo = remember(s.capsule) { state.db.queryHeight(s.capsule) }
+
     Card2 {
-        Text("工艺卡片", fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(bottom = 6.dp))
-        KvRow("花纹", s.pattern)
-        KvRow("规格", s.size)
-        KvRow("区域", s.region)
-        KvRow("模套温度", tc?.temp?.let { "${it} ℃" } ?: "—")
-        KvRow("硫化时间", tc?.finalText ?: "—")
-        KvRow("解码过程", tc?.let { "${it.baseText}（${TimeCode.letterLabel(it.letter)}）+ 机动 ${it.extraSeconds}秒" } ?: "—")
-        KvRow("胶囊规格", CapsuleAlias.display(s.capsule, state.aliasLookup))
-        KvRow("拉直高度", height.ifEmpty { "—" })
-        KvRow("合模力", s.clampForce)
-        KvRow("PCI压力", s.pciPressure)
-        KvRow("PCI高度", s.pciHeight)
-        KvRow("硫化程序", s.program)
-        KvRow("外温", s.externalTemp)
-        KvRow("胶种", s.rubber)
-        KvRow("钢圈", "${s.beadCode} ${s.beadAngle}")
-        KvRow("生效日期", s.effectiveDate)
-        Box(Modifier.height(10.dp))
-        Button(onClick = {
-            val now = System.currentTimeMillis()
-            state.db.insertFirstCure(
-                FirstCure(
-                    id = 0, machine = "", pattern = s.pattern, material = s.material, size = s.size,
-                    region = s.region, timeCode = s.timeCode, temp = tc?.temp?.toString() ?: "",
-                    finalTime = tc?.finalText ?: "", capsule = s.capsule, height = height,
-                    clampForce = s.clampForce, pciPressure = s.pciPressure, pciHeight = s.pciHeight,
-                    extra = "", createdAt = now
-                )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { state.queryResult = null }) { Text("← 返回列表") }
+            Box(Modifier.weight(1f))
+            InfoChip(s.region, MaterialTheme.colorScheme.tertiary)
+        }
+        Text(s.size, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        Text(s.material, fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+        Box(Modifier.height(12.dp))
+
+        // 大参数网格（2 列 × 4 行）
+        Row(Modifier.fillMaxWidth()) {
+            BigParam("模套温度", tc?.temp?.toString() ?: "—", "℃",
+                MaterialTheme.colorScheme.error, Modifier.weight(1f))
+            BigParam("硫化时间", tc?.finalText ?: "—", "",
+                MaterialTheme.colorScheme.primary, Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth()) {
+            BigParam("胶囊规格", CapsuleAlias.display(s.capsule, state.aliasLookup), "",
+                null, Modifier.weight(1f))
+            BigParam("拉直高度", heightInfo?.height?.ifEmpty { "—" } ?: "—", "mm",
+                MaterialTheme.colorScheme.tertiary, Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth()) {
+            BigParam("合模力", s.clampForce.ifEmpty { "—" }, "KN", null, Modifier.weight(1f))
+            BigParam("PCI压力", s.pciPressure.ifEmpty { "—" }, "MPa", null, Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth()) {
+            BigParam("PCI高度", s.pciHeight.ifEmpty { "—" }, "mm", null, Modifier.weight(1f))
+            BigParam("外温", s.externalTemp.ifEmpty { "—" }, "℃", null, Modifier.weight(1f))
+        }
+
+        Box(Modifier.height(8.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+        if (tc != null) {
+            Text(
+                "硫化时间解码：${s.timeCode} → ${tc.minutes}分${tc.letterSec}秒（${TimeCode.letterLabel(tc.letter)}）" +
+                        " + 机动 ${state.extraSeconds}秒 = ${tc.finalText}",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(vertical = 6.dp)
             )
-            state.firstCures.clear(); state.firstCures.addAll(state.db.queryFirstCures())
-            state.setStatus("已存入首缸记录")
-        }) { Text("展示为首缸") }
+        } else {
+            Text("时间代码 ${s.timeCode} 无法解析，请检查数据", fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = 6.dp))
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+
+        KvRow("硫化程序", s.program.ifEmpty { "—" })
+        KvRow("胶囊厂家", heightInfo?.manufacturer?.ifEmpty { "—" } ?: "—")
+        if (heightInfo != null && heightInfo.perimeter.isNotEmpty()) KvRow("断面周长", heightInfo.perimeter)
+        KvRow("英寸", s.inch.ifEmpty { "—" })
+        KvRow("胶种", s.rubber.ifEmpty { "—" })
+        KvRow("钢圈代码", s.beadCode.ifEmpty { "—" })
+        KvRow("钢圈角度", s.beadAngle.ifEmpty { "—" })
+        KvRow("生效日期", s.effectiveDate.ifEmpty { "—" })
+
+        Box(Modifier.height(10.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+        Box(Modifier.height(6.dp))
+
+        // 机台 + 侧别（用于首缸展示）
+        Text("机台（用于首缸展示，可修改）", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+        Box(Modifier.height(6.dp))
+        Box {
+            OutlinedButton(onClick = { machineMenu = true }) {
+                Text(
+                    if (state.queryMachine.isEmpty()) "选择机台（可不选）"
+                    else "${state.queryMachine} · ${state.querySide}"
+                )
+            }
+            DropdownMenu(expanded = machineMenu, onDismissRequest = { machineMenu = false },
+                modifier = Modifier.heightIn(max = 320.dp)) {
+                DropdownMenuItem(text = { Text("（不指定机台）") }, onClick = {
+                    state.queryMachine = ""; machineMenu = false
+                })
+                state.prefs.machines.ifEmpty { MachineList.machineIds }.forEach { m ->
+                    DropdownMenuItem(text = { Text(m) }, onClick = {
+                        state.queryMachine = m; machineMenu = false
+                    })
+                }
+            }
+        }
+        Box(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("双模", "L", "R").forEach { side ->
+                val on = state.querySide == side
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (on) MaterialTheme.colorScheme.tertiary
+                            else MaterialTheme.colorScheme.tertiary.copy(alpha = 0.08f)
+                        )
+                        .clickable { state.querySide = side }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(side, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                        color = if (on) Color.White else MaterialTheme.colorScheme.tertiary)
+                }
+            }
+        }
+
+        Box(Modifier.height(14.dp))
+        Button(
+            onClick = { saveFirstCure(state, s, heightInfo) },
+            modifier = Modifier.fillMaxWidth().height(46.dp)
+        ) { Text("展示为首缸", fontWeight = FontWeight.Bold, fontSize = 15.sp) }
     }
+}
+
+/** 存入首缸记录（机台取查询条件里选的，侧别同理） */
+private fun saveFirstCure(state: AppState, s: ProcessSpec, heightInfo: com.heda.vulcan.data.CapsuleHeight?) {
+    val tc = TimeCode.parse(s.timeCode, state.extraSeconds)
+    val machineText = if (state.queryMachine.isEmpty()) ""
+    else (state.queryMachine + " " + state.querySide).trim()
+    state.db.insertFirstCure(
+        FirstCure(
+            id = 0, machine = machineText, pattern = s.pattern, material = s.material, size = s.size,
+            region = s.region, timeCode = s.timeCode, temp = tc?.temp?.toString() ?: "",
+            finalTime = tc?.finalText ?: "", capsule = s.capsule, height = heightInfo?.height ?: "",
+            clampForce = s.clampForce, pciPressure = s.pciPressure, pciHeight = s.pciHeight,
+            extra = "", createdAt = System.currentTimeMillis()
+        )
+    )
+    state.firstCures.clear(); state.firstCures.addAll(state.db.queryFirstCures())
+    state.setStatus(
+        if (machineText.isEmpty()) "已存入首缸记录（未指定机台，可在首缸页补选）"
+        else "已存入首缸记录：$machineText"
+    )
 }
 
 // ---------------- 2. 首缸 ----------------
@@ -336,16 +729,16 @@ fun FirstCureScreen(state: AppState) {
             Text("已选 $checkedCount/${filtered.size}", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
         }
         Box(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = { exportSelected(state, filtered.filter { checked[it.id] == true }) },
-                enabled = checkedCount > 0
-            ) { Text("导出图片（$checkedCount 条）") }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // 未勾选时不禁用，点击给出明确提示（避免看起来"没有这个功能"）
+            Button(onClick = { exportSelected(state, filtered.filter { checked[it.id] == true }) }) {
+                Text("导出图片（$checkedCount 条）")
+            }
             OutlinedButton(onClick = { openExportDir(state) }) { Text("打开导出目录") }
-            OutlinedButton(
-                onClick = { confirmDeleteSelected = true },
-                enabled = checkedCount > 0
-            ) { Text("删除选中（$checkedCount 条）") }
+            OutlinedButton(onClick = {
+                if (checkedCount == 0) state.setStatus("请先勾选要删除的记录")
+                else confirmDeleteSelected = true
+            }) { Text("删除选中（$checkedCount 条）") }
             Box(Modifier.weight(1f))
             OutlinedButton(onClick = { confirmClear = true }, enabled = state.firstCures.isNotEmpty()) {
                 Text("清空全部", color = MaterialTheme.colorScheme.error)
@@ -353,7 +746,7 @@ fun FirstCureScreen(state: AppState) {
         }
         Box(Modifier.height(6.dp))
         Text(
-            "导出目录：${exportDir(state).absolutePath}（可在「设置」中更改）",
+            "勾选后可批量导出长图（最多 300 条）→ 导出目录：${exportDir(state).absolutePath}（可在「设置」中更改）",
             fontSize = 11.sp, color = MaterialTheme.colorScheme.outline
         )
     }
@@ -369,15 +762,37 @@ fun FirstCureScreen(state: AppState) {
         Card2 {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = isChecked, onCheckedChange = { checked[f.id] = it })
-                if (f.machine.isNotEmpty()) {
+                // 机台标签：直接点击即可修改（无需展开）
+                Box {
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                            .background(
+                                if (f.machine.isNotEmpty()) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)
+                            )
+                            .clickable { machineMenu = true }
                             .padding(horizontal = 8.dp, vertical = 3.dp)
                     ) {
-                        Text(f.machine, fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary)
+                        Text(
+                            if (f.machine.isNotEmpty()) "${f.machine} ▾" else "选机台 ▾",
+                            fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                            color = if (f.machine.isNotEmpty()) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outline
+                        )
+                    }
+                    DropdownMenu(expanded = machineMenu, onDismissRequest = { machineMenu = false }) {
+                        DropdownMenuItem(text = { Text("清除机台") }, onClick = {
+                            state.db.updateFirstCureMachine(f.id, "")
+                            refreshFirstCure(state); machineMenu = false
+                        })
+                        val enabledMachines = state.prefs.machines.ifEmpty { MachineList.machineIds }
+                        enabledMachines.forEach { m ->
+                            DropdownMenuItem(text = { Text(m) }, onClick = {
+                                state.db.updateFirstCureMachine(f.id, m)
+                                refreshFirstCure(state); machineMenu = false
+                            })
+                        }
                     }
                 }
                 Box(Modifier.weight(1f))
@@ -1416,18 +1831,29 @@ private fun downloadAsset(
     setReady: (File?) -> Unit
 ) {
     scope.launch(Dispatchers.IO) {
-        setDownloading(true)
-        setProgress(0)
-        val dir = Updater.updateDir(asset.version)
-        val zip = File(dir, "update.zip")
-        val ok = Updater.download(asset, zip) { p -> setProgress(p) }
-        val verified = ok && Updater.verifySha256(zip, asset.sha256)
-        val done = verified && Updater.unzip(zip, dir)
-        zip.delete()
-        setDownloading(false)
-        val msg = if (done) "已下载并解压到：${dir.absolutePath}" else "下载失败或校验未通过"
-        state.setStatus(msg)
-        setReady(if (done) dir else null)
+        // 所有 UI 状态更新都切回主线程，避免跨线程改 Compose 状态导致卡死
+        withContext(Dispatchers.Main) { setDownloading(true); setProgress(0) }
+        try {
+            val dir = Updater.updateDir(asset.version)
+            val zip = File(dir, "update.zip")
+            val ok = Updater.download(asset, zip) { p ->
+                scope.launch(Dispatchers.Main) { setProgress(p) }
+            }
+            val verified = ok && Updater.verifySha256(zip, asset.sha256)
+            val done = verified && Updater.unzip(zip, dir)
+            zip.delete()
+            withContext(Dispatchers.Main) {
+                setDownloading(false)
+                state.setStatus(if (done) "已下载并解压到：${dir.absolutePath}" else "下载失败或校验未通过")
+                setReady(if (done) dir else null)
+            }
+        } catch (e: Exception) {
+            AppLog.line("[更新] 下载异常: ${e.message}")
+            withContext(Dispatchers.Main) {
+                setDownloading(false)
+                state.setStatus("下载失败：${e.message}")
+            }
+        }
     }
 }
 
