@@ -61,7 +61,9 @@ compose.desktop {
             description = "Vulcan Desktop"
             vendor = "Heda"
             // jpackage 裁剪后的运行时镜像默认不含 java.sql，SQLite JDBC 会 NoClassDefFoundError
-            modules("java.sql")
+            // java.net.http：在线更新的 HttpClient 同样需要显式加入
+            // jdk.unsupported：sqlite-jdbc / SNIOC 原生库需要的 sun.misc 等内部 API
+            modules("java.sql", "java.net.http", "jdk.unsupported")
             windows {
                 menu = true
                 shortcut = true
