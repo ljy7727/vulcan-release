@@ -33,6 +33,8 @@ class AppState(val db: DesktopDb, val prefs: DesktopPrefs) {
     var queryPattern by mutableStateOf("")
     var querySize by mutableStateOf("")
     var queryRegion by mutableStateOf("")
+    var queryMachine by mutableStateOf("")
+    var querySide by mutableStateOf("双模")
     var queryResult by mutableStateOf<ProcessSpec?>(null)
     var queryCandidates by mutableStateOf(listOf<ProcessSpec>())
 
