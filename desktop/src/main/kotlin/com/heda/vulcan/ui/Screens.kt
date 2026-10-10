@@ -46,6 +46,7 @@ import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.text.font.FontWeight
@@ -152,8 +153,10 @@ private fun KvRow(k: String, v: String) {
 @Composable
 fun QueryScreen(state: AppState) {
     var pasteInput by remember { mutableStateOf("") }
-    var patternMenu by remember { mutableStateOf(false) }
-    var sizeMenu by remember { mutableStateOf(false) }
+    // 联想列表用「内嵌展开」而非 DropdownMenu 浮层：
+    // 浮层会抢焦点，导致输入一个字符后光标消失（需再点一次才能继续输入）
+    var patternListOpen by remember { mutableStateOf(false) }
+    var sizeListOpen by remember { mutableStateOf(false) }
     var machineMenu by remember { mutableStateOf(false) }
 
     Row(modifier = Modifier.fillMaxSize()) {
@@ -179,96 +182,135 @@ fun QueryScreen(state: AppState) {
                 }
                 Box(Modifier.height(4.dp))
 
-                // 花纹：输入 + 联想（聚焦/点击展开，输入过滤，忽略大小写）
-                Box {
-                    OutlinedTextField(
-                        value = state.queryPattern,
-                        onValueChange = { state.queryPattern = it; patternMenu = true; sizeMenu = false },
-                        label = { Text("花纹（规格）") },
-                        placeholder = { Text("如 RU06，点击即联想") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        trailingIcon = {
-                            TextButton(onClick = { patternMenu = !patternMenu }) { Text("▾") }
+                // 花纹：输入 + 内嵌联想列表（忽略大小写；不抢焦点，光标可连续输入）
+                OutlinedTextField(
+                    value = state.queryPattern,
+                    onValueChange = {
+                        state.queryPattern = it
+                        patternListOpen = true
+                        sizeListOpen = false
+                    },
+                    label = { Text("花纹（规格）") },
+                    placeholder = { Text("如 RU06，输入即联想") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { if (it.isFocused) patternListOpen = true },
+                    trailingIcon = {
+                        TextButton(onClick = { patternListOpen = !patternListOpen }) {
+                            Text(if (patternListOpen) "▴" else "▾", fontSize = 14.sp)
                         }
-                    )
-                    val sug = remember(state.queryPattern, state.patterns.size) {
-                        patternSuggestions(state.queryPattern, state.patterns)
                     }
-                    DropdownMenu(
-                        expanded = patternMenu && sug.isNotEmpty(),
-                        onDismissRequest = { patternMenu = false },
-                        modifier = Modifier.heightIn(max = 280.dp)
+                )
+                val patternSug = remember(state.queryPattern, state.patterns.size) {
+                    patternSuggestions(state.queryPattern, state.patterns)
+                }
+                if (patternListOpen && patternSug.isNotEmpty()) {
+                    Box(Modifier.height(4.dp))
+                    Text(
+                        if (state.queryPattern.isBlank()) "全部花纹（${state.patterns.size}），点击选择："
+                        else "匹配 ${patternSug.size} 项，点击选择：",
+                        fontSize = 11.sp, color = MaterialTheme.colorScheme.outline
+                    )
+                    Box(Modifier.height(2.dp))
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 190.dp)
+                            .verticalScroll(rememberScrollState())
                     ) {
-                        Text(
-                            if (state.queryPattern.isBlank()) "全部花纹（${state.patterns.size}）" else "匹配 ${sug.size} 项",
-                            fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                        )
-                        sug.forEach { p ->
+                        patternSug.forEach { p ->
                             val on = p.equals(state.queryPattern, ignoreCase = true)
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        p, fontSize = 13.sp,
-                                        fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                    )
-                                },
-                                onClick = {
-                                    state.queryPattern = p
-                                    patternMenu = false
-                                    // 花纹确定后，尺寸列表跟随该花纹
-                                    sizeMenu = false
-                                }
-                            )
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        state.queryPattern = p
+                                        patternListOpen = false
+                                    }
+                                    .padding(horizontal = 4.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    p, fontSize = 13.sp,
+                                    fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (on) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f), maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (on) Text("✓", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                            }
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                         }
                     }
                 }
 
                 Box(Modifier.height(8.dp))
 
-                // 规格尺寸：输入 + 联想
-                Box {
-                    OutlinedTextField(
-                        value = state.querySize,
-                        onValueChange = { state.querySize = it; sizeMenu = true; patternMenu = false },
-                        label = { Text("规格尺寸") },
-                        placeholder = { Text("如 225/50ZR17") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        trailingIcon = {
-                            TextButton(onClick = { sizeMenu = !sizeMenu }) { Text("▾") }
+                // 规格尺寸：输入 + 内嵌联想列表（同样不抢焦点）
+                OutlinedTextField(
+                    value = state.querySize,
+                    onValueChange = {
+                        state.querySize = it
+                        sizeListOpen = true
+                        patternListOpen = false
+                    },
+                    label = { Text("规格尺寸") },
+                    placeholder = { Text("如 225/50ZR17") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { if (it.isFocused) sizeListOpen = true },
+                    trailingIcon = {
+                        TextButton(onClick = { sizeListOpen = !sizeListOpen }) {
+                            Text(if (sizeListOpen) "▴" else "▾", fontSize = 14.sp)
                         }
-                    )
-                    // 花纹确定后按花纹查尺寸（缓存，避免每次重组都查库）
-                    val allSizes = remember(state.queryPattern) {
-                        if (state.queryPattern.isNotEmpty()) state.db.querySizes(state.queryPattern) else emptyList()
                     }
-                    val sug = if (state.querySize.isBlank()) allSizes.take(80)
-                    else allSizes.filter { it.contains(state.querySize, ignoreCase = true) }.take(50)
-                    DropdownMenu(
-                        expanded = sizeMenu && sug.isNotEmpty(),
-                        onDismissRequest = { sizeMenu = false },
-                        modifier = Modifier.heightIn(max = 280.dp)
+                )
+                // 花纹确定后按花纹查尺寸（缓存，避免每次重组都查库）
+                val allSizes = remember(state.queryPattern) {
+                    if (state.queryPattern.isNotEmpty()) state.db.querySizes(state.queryPattern) else emptyList()
+                }
+                val sizeSug = if (state.querySize.isBlank()) allSizes.take(80)
+                else allSizes.filter { it.contains(state.querySize, ignoreCase = true) }.take(50)
+                if (sizeListOpen && sizeSug.isNotEmpty()) {
+                    Box(Modifier.height(4.dp))
+                    Text(
+                        if (state.querySize.isBlank()) "可选尺寸（${sizeSug.size}），点击选择："
+                        else "匹配 ${sizeSug.size} 项，点击选择：",
+                        fontSize = 11.sp, color = MaterialTheme.colorScheme.outline
+                    )
+                    Box(Modifier.height(2.dp))
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 160.dp)
+                            .verticalScroll(rememberScrollState())
                     ) {
-                        Text(
-                            if (state.querySize.isBlank()) "可选尺寸（${sug.size}）" else "匹配 ${sug.size} 项",
-                            fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                        )
-                        sug.forEach { sz ->
+                        sizeSug.forEach { sz ->
                             val on = sz.equals(state.querySize, ignoreCase = true)
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        sz, fontSize = 13.sp,
-                                        fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                    )
-                                },
-                                onClick = { state.querySize = sz; sizeMenu = false }
-                            )
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        state.querySize = sz
+                                        sizeListOpen = false
+                                    }
+                                    .padding(horizontal = 4.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    sz, fontSize = 13.sp,
+                                    fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (on) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f), maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (on) Text("✓", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                            }
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                         }
                     }
                 }
