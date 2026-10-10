@@ -32,6 +32,14 @@ fun main() {
     // 消除 GPU(Direct3D) 合成在 resize 时的黑边/花屏时序问题。
     // 本应用为查询型工具，CPU 渲染性能完全够用。
     System.setProperty("skiko.renderApi", "SOFTWARE")
+
+    // 单实例保护：已有实例运行时，唤醒其窗口（从托盘）并退出本进程，
+    // 避免两个实例同时读写同一个 SQLite 数据库。
+    if (!com.heda.vulcan.core.SingleInstance.activateOrNotify()) {
+        AppLog.line("已有实例在运行，已唤出其主窗口，本进程退出")
+        return
+    }
+
     application {
     AppLog.startup()
 
@@ -87,6 +95,8 @@ fun main() {
 
         // 系统托盘 + 全局热键（只初始化一次）
         LaunchedEffect(Unit) {
+            // 单实例：第二个进程启动时，通过这里唤出本实例的窗口
+            com.heda.vulcan.core.SingleInstance.onShowRequest = { windowVisible = true }
             setupTray(
                 window = window,
                 enabled = state.trayEnabled,
