@@ -38,6 +38,10 @@ class AppState(val db: DesktopDb, val prefs: DesktopPrefs) {
 
     var stats by mutableStateOf(DbStats())
 
+    /** 胶囊对齐查找表（大写关键词 → 花纹，忽略大小写） */
+    val aliasLookup: Map<String, String>
+        get() = com.heda.vulcan.data.CapsuleAlias.toLookup(prefs.capsuleAliases)
+
     fun reloadAll() {
         patterns.clear(); patterns.addAll(db.queryAllPatterns())
         firstCures.clear(); firstCures.addAll(db.queryFirstCures())
