@@ -85,7 +85,7 @@ object Updater {
     fun fetchOne(manifestUrl: String): Manifest? = try {
         val client = newClient()
         val req = HttpRequest.newBuilder(URI.create(manifestUrl))
-            .timeout(Duration.ofSeconds(20))
+            .timeout(Duration.ofSeconds(8))
             .header("Accept", "application/vnd.github+json")
             .GET()
             .build()
@@ -117,7 +117,7 @@ object Updater {
     private fun newClient(): HttpClient {
         val b = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.ALWAYS)
-            .connectTimeout(Duration.ofSeconds(10))
+            .connectTimeout(Duration.ofSeconds(5))
         proxyAddress()?.let { (host, port) ->
             try {
                 b.proxy(java.net.ProxySelector.of(java.net.InetSocketAddress(host, port)))
@@ -156,6 +156,7 @@ object Updater {
             val total = asset.size.takeIf { it > 0 }
                 ?: resp.headers().firstValueAsLong("content-length").orElse(0L)
             var read = 0L
+            var lastPct = -1
             resp.body().use { input ->
                 FileOutputStream(dest).use { out ->
                     val buf = ByteArray(64 * 1024)
@@ -164,11 +165,18 @@ object Updater {
                         if (n <= 0) break
                         out.write(buf, 0, n)
                         read += n
-                        if (total > 0) onProgress((read * 100 / total).toInt().coerceIn(0, 100))
+                        if (total > 0) {
+                            // 节流：仅在整数百分比变化时回调，避免高频刷新拖垮 UI
+                            val pct = (read * 100 / total).toInt().coerceIn(0, 100)
+                            if (pct != lastPct) {
+                                lastPct = pct
+                                onProgress(pct)
+                            }
+                        }
                     }
                 }
             }
-            onProgress(100)
+            if (lastPct != 100) onProgress(100)
             true
         }
     } catch (e: Exception) {
