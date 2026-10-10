@@ -23,6 +23,11 @@ class DesktopPrefs(private val file: File = File(DesktopDb.dataDir(), "prefs.jso
     var activatedVersion: String = ""
     /** 上次检查更新的时间（毫秒） */
     var lastUpdateCheck: Long = 0L
+    /**
+     * 胶囊对齐（花纹别名）映射：关键词 → 对应花纹，**忽略大小写**。
+     * 用于规格中的花纹名与实际花纹不一致的情况（如 STEADY-33 ↔ A2000）。
+     */
+    var capsuleAliases: MutableList<List<String>> = CapsuleAlias.defaultAliases().toMutableList()
 
     init { load() }
 
@@ -44,6 +49,10 @@ class DesktopPrefs(private val file: File = File(DesktopDb.dataDir(), "prefs.jso
             if (m.isNotEmpty()) machines = m.toMutableList()
             activatedVersion = root["activated_version"].asStr()
             lastUpdateCheck = (root["last_update_check"] as? Number)?.toLong() ?: 0L
+            val al = root["capsule_aliases"].asList()
+                .map { pair -> pair.asList().map { it.asStr() }.filter { it.isNotEmpty() } }
+                .filter { it.size >= 2 }
+            if (al.isNotEmpty()) capsuleAliases = al.map { listOf(it[0], it[1]) }.toMutableList()
         } catch (_: Exception) {
             // 解析失败则使用默认值
         }
@@ -65,7 +74,8 @@ class DesktopPrefs(private val file: File = File(DesktopDb.dataDir(), "prefs.jso
             "screenshot_hotkey" to screenshotHotkey,
             "export_dir" to exportDir,
             "activated_version" to activatedVersion,
-            "last_update_check" to lastUpdateCheck
+            "last_update_check" to lastUpdateCheck,
+            "capsule_aliases" to capsuleAliases
         )
         file.writeText(Json.write(root))
     }
