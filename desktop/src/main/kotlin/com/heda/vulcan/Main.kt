@@ -27,7 +27,12 @@ import com.heda.vulcan.ui.AppState
  * 复刻自电脑版（vulcan-desktop）的反编译逻辑：Kotlin + Compose for Desktop，
  * SQLite(JDBC) 存储、全局热键（JNativeHook）、系统托盘（AWT）。
  */
-fun main() = application {
+fun main() {
+    // 用 CPU 软件渲染（Skiko 支持）：窗口缩放时全量重绘，
+    // 消除 GPU(Direct3D) 合成在 resize 时的黑边/花屏时序问题。
+    // 本应用为查询型工具，CPU 渲染性能完全够用。
+    System.setProperty("skiko.renderApi", "SOFTWARE")
+    application {
     AppLog.startup()
 
     val prefs = remember { DesktopPrefs() }
@@ -101,5 +106,6 @@ fun main() = application {
         }
 
         App(state)
+    }
     }
 }
