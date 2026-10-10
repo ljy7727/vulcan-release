@@ -800,26 +800,30 @@ fun FirstCureScreen(state: AppState) {
 
     filtered.forEach { f ->
         var machineMenu by remember { mutableStateOf(false) }
+        var sideMenu by remember { mutableStateOf(false) }
+        // machine 字段格式："1104 L" / "1104" / ""——拆成机台号与侧别分别管理
+        val machineOnly = f.machine.trim().split(" ").firstOrNull() ?: ""
+        val currentSide = f.machine.trim().split(" ").getOrNull(1)?.takeIf { it.isNotEmpty() } ?: "双模"
         val isChecked = checked[f.id] == true
         Card2 {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = isChecked, onCheckedChange = { checked[f.id] = it })
-                // 机台标签：直接点击即可修改（无需展开）
+                // 机台标签：点击改机台（保留原侧别）
                 Box {
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(8.dp))
                             .background(
-                                if (f.machine.isNotEmpty()) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                if (machineOnly.isNotEmpty()) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
                                 else MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)
                             )
                             .clickable { machineMenu = true }
                             .padding(horizontal = 8.dp, vertical = 3.dp)
                     ) {
                         Text(
-                            if (f.machine.isNotEmpty()) "${f.machine} ▾" else "选机台 ▾",
+                            if (machineOnly.isNotEmpty()) "$machineOnly ▾" else "选机台 ▾",
                             fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                            color = if (f.machine.isNotEmpty()) MaterialTheme.colorScheme.primary
+                            color = if (machineOnly.isNotEmpty()) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.outline
                         )
                     }
@@ -831,9 +835,53 @@ fun FirstCureScreen(state: AppState) {
                         val enabledMachines = state.prefs.machines.ifEmpty { MachineList.machineIds }
                         enabledMachines.forEach { m ->
                             DropdownMenuItem(text = { Text(m) }, onClick = {
-                                state.db.updateFirstCureMachine(f.id, m)
+                                state.db.updateFirstCureMachine(
+                                    f.id, if (currentSide != "双模") "$m $currentSide" else m
+                                )
                                 refreshFirstCure(state); machineMenu = false
                             })
+                        }
+                    }
+                }
+                Box(Modifier.width(6.dp))
+                // 侧别标签：点击改 双模/L/R（需先有机台）
+                Box {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                if (machineOnly.isNotEmpty()) MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
+                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.06f)
+                            )
+                            .clickable {
+                                if (machineOnly.isEmpty()) state.setStatus("请先选机台，再选左右模")
+                                else sideMenu = true
+                            }
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            "$currentSide ▾",
+                            fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                            color = if (machineOnly.isNotEmpty()) MaterialTheme.colorScheme.tertiary
+                            else MaterialTheme.colorScheme.outline
+                        )
+                    }
+                    DropdownMenu(expanded = sideMenu, onDismissRequest = { sideMenu = false }) {
+                        listOf("双模", "L", "R").forEach { sd ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        sd, fontWeight = if (sd == currentSide) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (sd == currentSide) MaterialTheme.colorScheme.tertiary
+                                        else MaterialTheme.colorScheme.onSurface
+                                    )
+                                },
+                                onClick = {
+                                    state.db.updateFirstCureMachine(f.id, "$machineOnly $sd")
+                                    refreshFirstCure(state); sideMenu = false
+                                    state.setStatus("已改为 $machineOnly $sd")
+                                }
+                            )
                         }
                     }
                 }
@@ -881,7 +929,7 @@ fun FirstCureScreen(state: AppState) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box {
                         OutlinedButton(onClick = { machineMenu = true }) {
-                            Text(if (f.machine.isEmpty()) "选机台" else "改机台")
+                            Text(if (machineOnly.isEmpty()) "选机台" else "改机台/侧别")
                         }
                         DropdownMenu(expanded = machineMenu, onDismissRequest = { machineMenu = false }) {
                             DropdownMenuItem(text = { Text("清除机台") }, onClick = {
@@ -891,7 +939,9 @@ fun FirstCureScreen(state: AppState) {
                             val enabledMachines = state.prefs.machines.ifEmpty { MachineList.machineIds }
                             enabledMachines.forEach { m ->
                                 DropdownMenuItem(text = { Text(m) }, onClick = {
-                                    state.db.updateFirstCureMachine(f.id, m)
+                                    state.db.updateFirstCureMachine(
+                                        f.id, if (currentSide != "双模") "$m $currentSide" else m
+                                    )
                                     refreshFirstCure(state); machineMenu = false
                                 })
                             }
