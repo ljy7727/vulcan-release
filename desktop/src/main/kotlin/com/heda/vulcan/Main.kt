@@ -14,6 +14,7 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import com.heda.vulcan.core.AppLog
 import com.heda.vulcan.core.Hotkeys
+import com.heda.vulcan.core.notifyTray
 import com.heda.vulcan.core.setupTray
 import com.heda.vulcan.data.DesktopDb
 import com.heda.vulcan.data.DesktopPrefs
@@ -46,16 +47,21 @@ fun main() = application {
         size = DpSize(1100.dp, 760.dp),
         position = WindowPosition(Alignment.Center)
     )
+    // 窗口可见性：关闭到托盘时隐藏（托盘菜单/双击可恢复）
+    var windowVisible by remember { mutableStateOf(true) }
 
     Window(
         onCloseRequest = {
             if (state.closeToTray && state.trayEnabled) {
                 AppLog.line("窗口已最小化到托盘")
+                windowVisible = false
+                notifyTray("硫化工艺助手", "已最小化到托盘；右键托盘图标可退出程序")
             } else {
                 AppLog.line("用户退出")
                 exitApplication()
             }
         },
+        visible = windowVisible,
         state = windowState,
         title = "硫化工艺助手 v1.9"
     ) {
@@ -70,7 +76,7 @@ fun main() = application {
                 window = window,
                 enabled = state.trayEnabled,
                 onExit = { exitApplication() },
-                onShow = { window.isVisible = true }
+                onShow = { windowVisible = true }
             )
             Hotkeys.start(
                 screenshotHotkey = prefs.screenshotHotkey,
