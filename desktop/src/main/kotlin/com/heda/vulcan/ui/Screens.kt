@@ -9,11 +9,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -31,6 +34,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -209,11 +213,20 @@ private fun readClipboardToQuery(state: AppState) {
     if (txt != null) {
         val p = SpecTextParser.parse(txt, state.patterns)
         if (p.usable) {
-            state.queryPattern = p.pattern!!
+            var pattern = p.pattern!!
+            var aliasNote = ""
+            // 花纹不在已知库 → 尝试「胶囊对齐」换算（忽略大小写）
+            val mapped = CapsuleAlias.resolvePattern(pattern, state.patterns, state.aliasLookup)
+            if (mapped != null) {
+                aliasNote = " · 「$pattern」按胶囊对齐对应「$mapped」"
+                AppLog.line("[识别] 胶囊对齐换算：$pattern → $mapped")
+                pattern = mapped
+            }
+            state.queryPattern = pattern
             state.querySize = p.size
-            val regions = state.db.queryRegions(p.pattern, p.size)
+            val regions = state.db.queryRegions(pattern, p.size)
             state.queryRegion = p.region ?: if (regions.size == 1) regions[0] else ""
-            state.setStatus("已从剪贴板文字识别：" + SpecTextParser.describe(p))
+            state.setStatus("已从剪贴板文字识别：" + SpecTextParser.describe(p) + aliasNote)
             doQuery(state)
         } else {
             state.setStatus("剪贴板文字里没找到规格（内容：" + txt.replace("\n", " ").take(40) + "）")
@@ -262,7 +275,7 @@ private fun SpecCard(state: AppState, s: ProcessSpec) {
         KvRow("模套温度", tc?.temp?.let { "${it} ℃" } ?: "—")
         KvRow("硫化时间", tc?.finalText ?: "—")
         KvRow("解码过程", tc?.let { "${it.baseText}（${TimeCode.letterLabel(it.letter)}）+ 机动 ${it.extraSeconds}秒" } ?: "—")
-        KvRow("胶囊规格", CapsuleAlias.display(s.capsule))
+        KvRow("胶囊规格", CapsuleAlias.display(s.capsule, state.aliasLookup))
         KvRow("拉直高度", height.ifEmpty { "—" })
         KvRow("合模力", s.clampForce)
         KvRow("PCI压力", s.pciPressure)
@@ -292,56 +305,243 @@ private fun SpecCard(state: AppState, s: ProcessSpec) {
 
 // ---------------- 2. 首缸 ----------------
 
+/**
+ * 首缸记录：搜索 + 批量勾选（全选/反选/清空）+ 导出长图 + 打开导出目录 + 批量删除。
+ * 列表版式与网页版一致（机台标签 / 尺寸·花纹 / 四列参数），导出图与三端同版式。
+ */
 @Composable
 fun FirstCureScreen(state: AppState) {
-    SectionTitle("首缸记录（${state.firstCures.size}）")
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 10.dp)) {
-        OutlinedButton(onClick = {
-            state.firstCures.clear(); state.firstCures.addAll(state.db.queryFirstCures())
-            state.setStatus("已刷新")
-        }) { Text("刷新") }
-        OutlinedButton(onClick = {
-            state.db.clearFirstCure(); state.firstCures.clear(); state.setStatus("已清空全部首缸记录")
-        }) { Text("清空全部") }
+    var search by remember { mutableStateOf("") }
+    var expandedId by remember { mutableStateOf<Long?>(null) }
+    var confirmClear by remember { mutableStateOf(false) }
+    var confirmDeleteSelected by remember { mutableStateOf(false) }
+    val checked = remember { mutableStateMapOf<Long, Boolean>() }
+
+    val filtered = state.firstCures.filter { f ->
+        search.isBlank() ||
+                f.material.contains(search, true) || f.machine.contains(search, true) ||
+                f.size.contains(search, true) || f.capsule.contains(search, true)
+    }
+    val checkedCount = filtered.count { checked[it.id] == true }
+
+    SectionTitle("首缸记录")
+    Card2 {
+        Field("搜索（物料/机台/尺寸/胶囊）", search, { search = it })
+        Box(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { filtered.forEach { checked[it.id] = true } }) { Text("全选") }
+            OutlinedButton(onClick = { filtered.forEach { checked[it.id] = !(checked[it.id] ?: false) } }) { Text("反选") }
+            OutlinedButton(onClick = { checked.clear() }) { Text("清空选择") }
+            Box(Modifier.weight(1f))
+            Text("已选 $checkedCount/${filtered.size}", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+        }
+        Box(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { exportSelected(state, filtered.filter { checked[it.id] == true }) },
+                enabled = checkedCount > 0
+            ) { Text("导出图片（$checkedCount 条）") }
+            OutlinedButton(onClick = { openExportDir(state) }) { Text("打开导出目录") }
+            OutlinedButton(
+                onClick = { confirmDeleteSelected = true },
+                enabled = checkedCount > 0
+            ) { Text("删除选中（$checkedCount 条）") }
+            Box(Modifier.weight(1f))
+            OutlinedButton(onClick = { confirmClear = true }, enabled = state.firstCures.isNotEmpty()) {
+                Text("清空全部", color = MaterialTheme.colorScheme.error)
+            }
+        }
+        Box(Modifier.height(6.dp))
+        Text(
+            "导出目录：${exportDir(state).absolutePath}（可在「设置」中更改）",
+            fontSize = 11.sp, color = MaterialTheme.colorScheme.outline
+        )
     }
 
     if (state.firstCures.isEmpty()) {
-        Text("暂无首缸记录", color = MaterialTheme.colorScheme.outline)
+        Text("暂无首缸记录（在查询页点「展示为首缸」后保存到这里）", fontSize = 13.sp, color = MaterialTheme.colorScheme.outline)
         return
     }
-    state.firstCures.forEach { f ->
+
+    filtered.forEach { f ->
         var machineMenu by remember { mutableStateOf(false) }
+        val isChecked = checked[f.id] == true
         Card2 {
-            KvRow("花纹", f.pattern)
-            KvRow("规格", f.size)
-            KvRow("区域", f.region)
-            KvRow("硫化时间", f.finalTime)
-            KvRow("模套温度", f.temp)
-            KvRow("胶囊", CapsuleAlias.display(f.capsule))
-            KvRow("拉直高度", f.height)
-            KvRow("机台", f.machine.ifEmpty { "（未指定）" })
-            Box(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box {
-                    OutlinedButton(onClick = { machineMenu = true }) { Text(if (f.machine.isEmpty()) "选机台" else "改机台") }
-                    DropdownMenu(expanded = machineMenu, onDismissRequest = { machineMenu = false }) {
-                        DropdownMenuItem(text = { Text("清除机台") }, onClick = {
-                            state.db.updateFirstCureMachine(f.id, "")
-                            refreshFirstCure(state); machineMenu = false
-                        })
-                        MachineList.machineIds.forEach { m ->
-                            DropdownMenuItem(text = { Text(m) }, onClick = {
-                                state.db.updateFirstCureMachine(f.id, m)
-                                refreshFirstCure(state); machineMenu = false
-                            })
-                        }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = isChecked, onCheckedChange = { checked[f.id] = it })
+                if (f.machine.isNotEmpty()) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(f.machine, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary)
                     }
                 }
-                OutlinedButton(onClick = {
-                    state.db.deleteFirstCure(f.id); refreshFirstCure(state); state.setStatus("已删除")
-                }) { Text("删除") }
+                Box(Modifier.weight(1f))
+                Text(
+                    SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(f.createdAt)),
+                    fontSize = 11.sp, color = MaterialTheme.colorScheme.outline
+                )
+            }
+            // 尺寸 · 花纹（点击展开详情）
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable {
+                    expandedId = if (expandedId == f.id) null else f.id
+                }.padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(f.size, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Box(Modifier.width(8.dp))
+                Text(f.pattern, fontSize = 14.sp)
+                Box(Modifier.weight(1f))
+                if (f.region.isNotEmpty()) {
+                    Text(f.region, fontSize = 12.sp, color = MaterialTheme.colorScheme.tertiary,
+                        fontWeight = FontWeight.Bold)
+                }
+            }
+            Text(f.material, fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Box(Modifier.height(6.dp))
+            // 四列参数
+            Row(Modifier.fillMaxWidth()) {
+                MiniParam("硫化时间", f.finalTime, Modifier.weight(1f))
+                MiniParam("模套温度", f.temp.ifEmpty { "—" }, Modifier.weight(1f), "℃")
+                MiniParam("胶囊", CapsuleAlias.display(f.capsule, state.aliasLookup), Modifier.weight(1f))
+                MiniParam("拉直高度", f.height.ifEmpty { "—" }, Modifier.weight(1f), "mm")
+            }
+            if (expandedId == f.id) {
+                Box(Modifier.height(6.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                KvRow("合模力", "${f.clampForce.ifEmpty { "—" }} KN")
+                KvRow("PCI压力", "${f.pciPressure.ifEmpty { "—" }} MPa")
+                KvRow("PCI高度", "${f.pciHeight.ifEmpty { "—" }} mm")
+                KvRow("时间代码", f.timeCode.ifEmpty { "—" })
+                if (f.extra.isNotEmpty()) KvRow("其他", f.extra)
+                Box(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box {
+                        OutlinedButton(onClick = { machineMenu = true }) {
+                            Text(if (f.machine.isEmpty()) "选机台" else "改机台")
+                        }
+                        DropdownMenu(expanded = machineMenu, onDismissRequest = { machineMenu = false }) {
+                            DropdownMenuItem(text = { Text("清除机台") }, onClick = {
+                                state.db.updateFirstCureMachine(f.id, "")
+                                refreshFirstCure(state); machineMenu = false
+                            })
+                            val enabledMachines = state.prefs.machines.ifEmpty { MachineList.machineIds }
+                            enabledMachines.forEach { m ->
+                                DropdownMenuItem(text = { Text(m) }, onClick = {
+                                    state.db.updateFirstCureMachine(f.id, m)
+                                    refreshFirstCure(state); machineMenu = false
+                                })
+                            }
+                        }
+                    }
+                    OutlinedButton(onClick = {
+                        state.db.deleteFirstCure(f.id); checked.remove(f.id)
+                        refreshFirstCure(state); state.setStatus("已删除 1 条")
+                    }) { Text("删除本条") }
+                }
             }
         }
+    }
+
+    // 清空全部确认
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("清空全部首缸记录？") },
+            text = { Text("将删除全部 ${state.firstCures.size} 条首缸记录（工艺数据、不良、备忘不受影响）。此操作不可撤销。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClear = false
+                    state.db.clearFirstCure(); checked.clear(); refreshFirstCure(state)
+                    state.setStatus("已清空全部首缸记录")
+                }) { Text("清空", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("取消") } }
+        )
+    }
+
+    // 批量删除确认
+    if (confirmDeleteSelected) {
+        val selIds = filtered.filter { checked[it.id] == true }.map { it.id }
+        AlertDialog(
+            onDismissRequest = { confirmDeleteSelected = false },
+            title = { Text("删除选中的 ${selIds.size} 条记录？") },
+            text = { Text("此操作不可撤销。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDeleteSelected = false
+                    selIds.forEach { state.db.deleteFirstCure(it); checked.remove(it) }
+                    refreshFirstCure(state)
+                    state.setStatus("已删除 ${selIds.size} 条记录")
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDeleteSelected = false }) { Text("取消") } }
+        )
+    }
+}
+
+@Composable
+private fun MiniParam(label: String, value: String, modifier: Modifier = Modifier, suffix: String = "") {
+    Column(modifier) {
+        Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+        Text(
+            value + suffix, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+            maxLines = 1, overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/** 导出目录：prefs.exportDir 优先，未配置时用桌面。 */
+internal fun exportDir(state: AppState): File {
+    val configured = state.prefs.exportDir
+    if (configured.isNotEmpty()) {
+        val f = File(configured)
+        if (f.exists() || f.mkdirs()) return f
+    }
+    return File(System.getProperty("user.home") ?: ".", "Desktop")
+}
+
+private fun openExportDir(state: AppState) {
+    val dir = exportDir(state)
+    dir.mkdirs()
+    try {
+        if (java.awt.Desktop.isDesktopSupported()) {
+            java.awt.Desktop.getDesktop().open(dir)
+        } else {
+            ProcessBuilder("explorer.exe", dir.absolutePath).start()
+        }
+        state.setStatus("已打开导出目录：${dir.absolutePath}")
+    } catch (_: Throwable) {
+        try {
+            ProcessBuilder("explorer.exe", dir.absolutePath).start()
+        } catch (_: Throwable) {
+            state.setStatus("无法打开目录：${dir.absolutePath}")
+        }
+    }
+}
+
+private fun exportSelected(state: AppState, sel: List<FirstCure>) {
+    if (sel.isEmpty()) { state.setStatus("请先勾选要导出的记录"); return }
+    if (sel.size > 300) { state.setStatus("一次最多导出 300 条，请分批"); return }
+    try {
+        val dir = exportDir(state)
+        val file = File(dir, FirstCureExport.todayFileName())
+        val img = FirstCureExport.render(sel, "硫化首缸清单", state.aliasLookup)
+        if (FirstCureExport.save(img, file)) {
+            AppLog.line("[首缸] 导出图片 ${sel.size} 条 → ${file.absolutePath}")
+            state.setStatus("已导出 ${sel.size} 条 → ${file.absolutePath}")
+        } else {
+            state.setStatus("导出失败：写入图片出错")
+        }
+    } catch (e: Exception) {
+        AppLog.line("[首缸] 导出异常: ${e.message}")
+        state.setStatus("导出失败：${e.message}")
     }
 }
 
@@ -358,86 +558,126 @@ private val PIE_COLORS = listOf(
 )
 
 /**
- * 外观不良：搜索 + 详情（原因条形图 / 责任科室饼图 / 判胎明细 / 备注）+ 列表。
- * 对齐网页版表现；并额外解决网页版未处理的问题：FM 家族子类（FMC/FMG/FMW…）
+ * 外观不良：**左右分栏**布局。
+ * 左侧为列表（固定宽度、独立滚动、点击不跳动），右侧为详情（独立滚动）。
+ * 对齐网页版信息层次；并解决网页版未处理的问题：FM 家族子类（FMC/FMG/FMW…）
  * 在判胎表中独立成 code 但不良表只有 FM 一条，精确匹配会漏数据，故按前缀聚合。
  */
 @Composable
-fun DefectScreen(state: AppState, scroll: ScrollState) {
-    val scope = rememberCoroutineScope()
+fun DefectScreen(state: AppState) {
     var search by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<String?>(null) }
     var noteEdit by remember { mutableStateOf("") }
 
-    SectionTitle("外观不良")
     LaunchedEffect(Unit) {
         AppLog.line("[不良] 页面打开：共 ${state.defects.size} 条不良")
     }
     val filtered = if (search.isBlank()) state.defects
     else state.defects.filter { it.code.contains(search, true) || it.name.contains(search, true) }
 
-    Card2 {
-        Field("搜索（简称或名称）", search, { search = it })
-        Box(Modifier.height(6.dp))
-        Text(
-            "共 ${state.defects.size} 条不良，当前显示 ${filtered.size} 条",
-            fontSize = 12.sp, color = MaterialTheme.colorScheme.outline
-        )
-    }
+    Row(modifier = Modifier.fillMaxSize()) {
+        // ============ 左：列表（固定宽，不随详情跳动）============
+        Column(
+            modifier = Modifier
+                .width(352.dp)
+                .fillMaxHeight()
+                .padding(start = 16.dp, top = 16.dp, bottom = 16.dp)
+        ) {
+            Text("外观不良", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Box(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = search,
+                onValueChange = { search = it },
+                label = { Text("搜索（简称或名称）") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Box(Modifier.height(6.dp))
+            Text(
+                "共 ${state.defects.size} 条，显示 ${filtered.size} 条",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.outline
+            )
+            Box(Modifier.height(8.dp))
 
-    // 详情：选中后才出现，位于列表上方
-    selected?.let { code ->
-        state.defects.firstOrNull { it.code == code }?.let { d ->
-            DefectDetailCard(state, d, noteEdit, { noteEdit = it }, onClose = { selected = null })
-        }
-    }
-
-    // 列表
-    Card2 {
-        if (filtered.isEmpty()) {
-            Text("没有匹配的不良", fontSize = 13.sp, color = MaterialTheme.colorScheme.outline)
-        }
-        filtered.take(400).forEachIndexed { idx, d ->
-            val sel = selected == d.code
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(
-                        if (sel) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                        else Color.Transparent
-                    )
-                    .clickable {
-                        if (sel) {
-                            selected = null
-                            AppLog.line("[不良] 收起详情 ${d.code}")
-                        } else {
-                            selected = d.code
-                            noteEdit = d.note
-                            val fam = state.db.queryCausesFamily(d.code)
-                            AppLog.line("[不良] 打开详情 ${d.code} ${d.name}｜判胎记录 ${fam.size} 条｜子类 ${fam.map { it.code }.filter { it != d.code }.distinct().size} 种")
-                            // 详情在列表上方：选中后滚回顶部，避免"点了看不到"
-                            scope.launch { scroll.animateScrollTo(0) }
+            val listScroll = rememberScrollState()
+            Column(modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(listScroll)) {
+                if (filtered.isEmpty()) {
+                    Text("没有匹配的不良", fontSize = 13.sp, color = MaterialTheme.colorScheme.outline)
+                }
+                filtered.take(500).forEachIndexed { idx, d ->
+                    val sel = selected == d.code
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(
+                                if (sel) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                                else Color.Transparent
+                            )
+                            .clickable {
+                                if (sel) {
+                                    selected = null
+                                } else {
+                                    selected = d.code
+                                    noteEdit = d.note
+                                    val fam = state.db.queryCausesFamily(d.code)
+                                    AppLog.line(
+                                        "[不良] 打开详情 ${d.code} ${d.name}｜判胎记录 ${fam.size} 条｜" +
+                                                "子类 ${fam.map { it.code }.filter { it != d.code }.distinct().size} 种"
+                                    )
+                                }
+                            }
+                            .padding(vertical = 8.dp, horizontal = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            d.code, fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.width(58.dp), maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            d.name, fontSize = 13.sp,
+                            modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                        if (d.note.isNotEmpty()) {
+                            Text("✎", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
                         }
                     }
-                    .padding(vertical = 8.dp, horizontal = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    d.code, fontWeight = FontWeight.Bold, fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.width(62.dp), maxLines = 1, overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    d.name, fontSize = 13.sp,
-                    modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis
-                )
-                if (d.note.isNotEmpty()) {
-                    Text("✎", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                    if (idx < filtered.size - 1) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                    }
                 }
             }
-            if (idx < filtered.size - 1) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f))
+        }
+
+        // 竖向分隔线
+        Box(
+            Modifier
+                .width(1.dp)
+                .fillMaxHeight()
+                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+        )
+
+        // ============ 右：详情（独立滚动）============
+        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+            val detailScroll = rememberScrollState()
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(detailScroll)
+                    .padding(16.dp)
+            ) {
+                val d = selected?.let { code -> state.defects.firstOrNull { it.code == code } }
+                if (d == null) {
+                    Box(Modifier.fillMaxWidth().padding(top = 120.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            "← 点击左侧不良查看详情",
+                            fontSize = 14.sp, color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                } else {
+                    DefectDetailCard(state, d, noteEdit, { noteEdit = it }, onClose = { selected = null })
+                }
             }
         }
     }
@@ -504,6 +744,11 @@ private fun DefectDetailCard(
             val depts = byDept.entries.sortedByDescending { it.value }.map { it.key to it.value }
             Box(Modifier.height(16.dp))
             Text("责任科室占比", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Box(Modifier.height(4.dp))
+            Text(
+                "主要责任科室：${depts.firstOrNull()?.first ?: "—"}（占 ${pct(depts.firstOrNull()?.second ?: 0, total)}%）",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.outline
+            )
             Box(Modifier.height(8.dp))
             val holeColor = MaterialTheme.colorScheme.surface
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -838,23 +1083,38 @@ private fun importBackup(state: AppState) {
 @Composable
 fun SettingsScreen(state: AppState) {
     SectionTitle("设置")
+
+    // ---- 机动时间 ----
     Card2 {
         Field("机动时间（秒）", state.extraSeconds.toString(), {
             it.toIntOrNull()?.let { v -> state.extraSeconds = v; state.persistPrefs() }
         }, Modifier.width(200.dp))
-        Box(Modifier.height(10.dp))
-        Text("主题颜色", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+        Box(Modifier.height(4.dp))
+        Text("最终硫化时间 = 代码时间 + 机动时间（默认 14 秒）", fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.outline)
+    }
+
+    // ---- 主题外观（与 APK 同一套完整色板：背景色随主题整体变化）----
+    Card2 {
+        Text("主题外观", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        Box(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Themes.all.forEach { t ->
                 val sel = state.themeId == t.id
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (sel) t.primary else MaterialTheme.colorScheme.surface)
-                        .clickable { state.themeId = t.id; state.persistPrefs() }
-                        .padding(horizontal = 10.dp, vertical = 8.dp)
-                ) {
-                    Text(t.label, color = if (sel) androidx.compose.ui.graphics.Color.White else MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(t.primary)
+                            .clickable { state.themeId = t.id; state.persistPrefs() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (sel) Text("✓", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    }
+                    Box(Modifier.height(4.dp))
+                    Text(t.label, fontSize = 11.sp,
+                        color = if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
                 }
             }
         }
@@ -863,6 +1123,152 @@ fun SettingsScreen(state: AppState) {
             Checkbox(checked = state.darkMode, onCheckedChange = { state.darkMode = it; state.persistPrefs() })
             Text("深色模式")
         }
+    }
+
+    // ---- 导出目录 ----
+    Card2 {
+        Text("首缸导出目录", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        Box(Modifier.height(6.dp))
+        Text(exportDir(state).absolutePath, fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+        Box(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                val d = pickDirectory("选择首缸图片导出目录")
+                if (d != null) {
+                    state.prefs.exportDir = d.absolutePath
+                    state.prefs.save()
+                    state.setStatus("导出目录已设为：${d.absolutePath}")
+                }
+            }) { Text("更改目录") }
+            OutlinedButton(onClick = { openExportDir(state) }) { Text("打开目录") }
+            if (state.prefs.exportDir.isNotEmpty()) {
+                OutlinedButton(onClick = {
+                    state.prefs.exportDir = ""; state.prefs.save()
+                    state.setStatus("已恢复默认导出目录（桌面）")
+                }) { Text("恢复默认") }
+            }
+        }
+        Box(Modifier.height(4.dp))
+        Text("导出图片自动保存到该目录，文件名如「2026年10月10日首缸图.png」", fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.outline)
+    }
+
+    // ---- 胶囊对齐（花纹别名）----
+    Card2 {
+        var aliases by remember { mutableStateOf(state.prefs.capsuleAliases.map { it.toList() }) }
+        var newKey by remember { mutableStateOf("") }
+        var newVal by remember { mutableStateOf("") }
+
+        Text("胶囊对齐（花纹别名）", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        Box(Modifier.height(4.dp))
+        Text(
+            "规格中的花纹与实际花纹不一致时配置对应关系（如 STEADY-33 对应 A2000）。" +
+                    "识别到不认识的花纹会自动按此换算，并在提示中说明「某花纹对应某花纹」。忽略大小写。",
+            fontSize = 11.sp, color = MaterialTheme.colorScheme.outline
+        )
+        Box(Modifier.height(8.dp))
+
+        if (aliases.isEmpty()) {
+            Text("（暂无对齐规则）", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+        }
+        aliases.forEachIndexed { i, pair ->
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(pair[0], fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier.width(150.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("→", fontSize = 13.sp, color = MaterialTheme.colorScheme.outline)
+                Box(Modifier.width(10.dp))
+                Text(pair.getOrElse(1) { "" }, fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                TextButton(onClick = {
+                    val nl = aliases.toMutableList().also { it.removeAt(i) }
+                    aliases = nl.map { it.toList() }
+                    state.prefs.capsuleAliases = aliases.toMutableList()
+                    state.prefs.save()
+                    state.setStatus("已删除对齐：${pair[0]} → ${pair.getOrElse(1) { "" }}")
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            }
+        }
+
+        Box(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = newKey, onValueChange = { newKey = it },
+                label = { Text("关键词") }, singleLine = true,
+                modifier = Modifier.width(170.dp)
+            )
+            Text("→", fontSize = 15.sp)
+            OutlinedTextField(
+                value = newVal, onValueChange = { newVal = it },
+                label = { Text("对应花纹") }, singleLine = true,
+                modifier = Modifier.width(170.dp)
+            )
+            Button(
+                enabled = newKey.isNotBlank() && newVal.isNotBlank(),
+                onClick = {
+                    aliases = aliases + listOf(listOf(newKey.trim(), newVal.trim()))
+                    state.prefs.capsuleAliases = aliases.toMutableList()
+                    state.prefs.save()
+                    state.setStatus("已添加对齐：${newKey.trim()} → ${newVal.trim()}")
+                    newKey = ""; newVal = ""
+                }
+            ) { Text("添加") }
+            OutlinedButton(onClick = {
+                aliases = CapsuleAlias.defaultAliases().map { it.toList() }
+                state.prefs.capsuleAliases = aliases.toMutableList()
+                state.prefs.save()
+                state.setStatus("已恢复默认三条对齐")
+            }) { Text("恢复默认") }
+        }
+    }
+
+    // ---- 机台（仅用于首缸展示）----
+    Card2 {
+        var machines by remember { mutableStateOf(state.prefs.machines.toList()) }
+        val allIds = MachineList.machineIds
+        Text("机台（仅用于首缸展示）· 已启用 ${machines.size} 台", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        Box(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                machines = allIds.toList()
+                state.prefs.machines = machines.toMutableList(); state.prefs.save()
+            }) { Text("全选") }
+            OutlinedButton(onClick = {
+                machines = listOf("1101", "1102", "1103", "1104")
+                state.prefs.machines = machines.toMutableList(); state.prefs.save()
+            }) { Text("最少（只留 1101-1104）") }
+            OutlinedButton(onClick = {
+                machines = emptyList()
+                state.prefs.machines = mutableListOf(); state.prefs.save()
+            }) { Text("清空") }
+        }
+        Box(Modifier.height(8.dp))
+        allIds.chunked(8).forEach { row ->
+            Row(Modifier.fillMaxWidth()) {
+                row.forEach { id ->
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = id in machines,
+                            onCheckedChange = { on ->
+                                machines = if (on) machines + id else machines - id
+                                state.prefs.machines = machines.toMutableList(); state.prefs.save()
+                            }
+                        )
+                        Text(id, fontSize = 12.sp)
+                    }
+                }
+                repeat(8 - row.size) { Box(Modifier.weight(1f)) }
+            }
+        }
+    }
+
+    // ---- 托盘与快捷键 ----
+    Card2 {
+        Text("系统与快捷键", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        Box(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(checked = state.trayEnabled, onCheckedChange = { state.trayEnabled = it; state.persistPrefs() })
             Text("启用系统托盘")
@@ -871,6 +1277,8 @@ fun SettingsScreen(state: AppState) {
             Checkbox(checked = state.closeToTray, onCheckedChange = { state.closeToTray = it; state.persistPrefs() })
             Text("关闭窗口时最小化到托盘")
         }
+        KvRow("截图热键", state.prefs.screenshotHotkey)
+        KvRow("全局搜索", state.prefs.searchTrigger)
     }
 
     Card2 {
