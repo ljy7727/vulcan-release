@@ -80,22 +80,25 @@ fun App(state: AppState) {
                 // 内容区
                 Column(modifier = Modifier.fillMaxSize()) {
                     Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                        val scroll = rememberScrollState()
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .verticalScroll(scroll)
-                                .padding(16.dp)
-                        ) {
-                            when (state.tab) {
-                                0 -> QueryScreen(state)
-                                1 -> FirstCureScreen(state)
-                                2 -> DefectScreen(state, scroll)
-                                3 -> MemoScreen(state)
-                                4 -> ImportScreen(state)
-                                5 -> BackupScreen(state)
-                                6 -> SettingsScreen(state)
-                                else -> UpdateScreen(state)
+                        if (state.tab == 0 || state.tab == 2) {
+                            // 查询页 / 不良页：左右分栏布局，自行管理滚动
+                            if (state.tab == 0) QueryScreen(state) else DefectScreen(state)
+                        } else {
+                            val scroll = rememberScrollState()
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(scroll)
+                                    .padding(16.dp)
+                            ) {
+                                when (state.tab) {
+                                    1 -> FirstCureScreen(state)
+                                    3 -> MemoScreen(state)
+                                    4 -> ImportScreen(state)
+                                    5 -> BackupScreen(state)
+                                    6 -> SettingsScreen(state)
+                                    else -> UpdateScreen(state)
+                                }
                             }
                         }
                     }
@@ -127,6 +130,14 @@ fun pickFile(mode: Int, title: String, filterExt: String? = null): File? {
 }
 
 fun pickOpenFile(title: String, ext: String? = null): File? = pickFile(FileDialog.LOAD, title, ext)
+
+/** 目录选择（JFileChooser，用于导出目录等）。 */
+fun pickDirectory(title: String): File? {
+    val fc = javax.swing.JFileChooser()
+    fc.dialogTitle = title
+    fc.fileSelectionMode = javax.swing.JFileChooser.DIRECTORIES_ONLY
+    return if (fc.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) fc.selectedFile else null
+}
 
 fun pickSaveFile(title: String, defaultName: String): File? {
     val dlg = FileDialog(null as java.awt.Frame?, title, FileDialog.SAVE)
