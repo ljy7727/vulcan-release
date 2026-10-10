@@ -65,6 +65,16 @@ fun main() = application {
         state = windowState,
         title = "硫化工艺助手 v1.9"
     ) {
+        // 缩放窗口时 Skia 绘图表面重建有延迟，新暴露区域会先显示 AWT 背景色（默认黑色）。
+        // 把它设为主题背景色，黑边就变成与界面一致的底色，肉眼几乎不可见。
+        LaunchedEffect(state.themeId, state.darkMode) {
+            val t = com.heda.vulcan.ui.Themes.byId(state.themeId)
+            val c = if (state.darkMode) t.darkBackground else t.background
+            window.background = java.awt.Color(
+                (c.red * 255).toInt(), (c.green * 255).toInt(), (c.blue * 255).toInt()
+            )
+        }
+
         if (!activated) {
             com.heda.vulcan.ui.ActivationGate(prefs) { activated = true }
             return@Window
