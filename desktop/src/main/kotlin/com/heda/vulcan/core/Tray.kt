@@ -45,3 +45,12 @@ fun setupTray(window: Window, enabled: Boolean, onExit: () -> Unit, onShow: () -
         AppLog.line("托盘初始化失败: ${e.message}")
     }
 }
+
+/** 托盘气泡通知（如"已最小化到托盘"）。托盘不可用时静默忽略。 */
+fun notifyTray(title: String, message: String) {
+    try {
+        trayIcon?.displayMessage(title, message, TrayIcon.MessageType.INFO)
+    } catch (_: Throwable) {
+        // 忽略
+    }
+}
